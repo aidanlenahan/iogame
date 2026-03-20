@@ -759,4 +759,63 @@ To prioritize the most basic and important tasks first, development is divided i
 
 ---
 
-*This PRD was compiled from all available public documentation, wiki pages, and community guides for OpenFront.io as of March 2026. It is intended to serve as a comprehensive reference for a faithful remake of the game.*
+*This PRD was compiled from all available public documentation, wiki pages, and community guides for OpenFront.io as of March 2026. It is intended to serve as a comprehensive reference for a faithful remake of the game.*\n---
+## 17. Current Implementation Status (Alpha Build)
+
+### 17.1 Completed (Working Now)
+- Backend map generation + Redis storage for 100x100 tiles.
+- API endpoints:
+  - `GET /api/map` returns the full tile map.
+  - `GET /api/tile/:x/:y` returns a specific tile.
+  - `POST /api/tile/:x/:y` updates ownership/type/pop.
+- Frontend Pixi.js rendering of the world map using backend tile data.
+- Tile hover UI details and clickable capture action.
+- Backend adjacency-validated attack action (`POST /api/action/attack`) implemented.
+- Backend population tick and player resources implemented.
+- Control percentage and victory detection added (80% non-radioactive land).
+- Docker compose setup with nginx reverse proxy and backend services.
+
+### 17.2 Current Gaps (Alpha to Beta Transition)
+- Basic battle resolution is now implemented (strength, casualties, terrain modifiers).
+- No building/unit production systems yet.
+- Population growth and troop/worker system not implemented in gameplay.
+- No player/session state, authentication, or multiplayer sync.
+- No persistent match lifecycle (start/end conditions) in backend.
+- UI currently draws static tile grid with basic interaction only.
+
+---
+## 18. Updated Engineering TODO (Next 2-3 Sprints)
+
+### Sprint 1 (Core Gameplay Loop)
+1. Implement adjacency validation and tile combat in backend:
+   - Only allow actions on neighboring tiles.
+   - Resolve attack with simple strength formula plus terrain modifiers.
+2. Add tile ownership color state and occupant markers in frontend.
+3. Add passive population growth per tile and base tile population (+3) logic.
+4. Add player resources (gold/pop) and UI counters.
+5. Add win condition check: own >= 80% non-radioactive land.
+
+### Sprint 2 (Buildings + Units + Economy)
+1. Implement building placement API (`/api/building`) and UI build menu.
+2. Add City/Port/Defense/Post/Missile/Factory building effects.
+3. Add troop and worker split + production plus gold income from tiles.
+4. Add naval movement and port-based warship unit creation.
+5. Add trade route gold generation and transport path data.
+
+### Sprint 3 (Multiplayer, Diplomacy, Nuclear, Endgame)
+1. Add player sessions and matchmaking API.
+2. Add alliances, embargo, and diplomacy requests.
+3. Add nuclear weapon launch flow and SAM interception logic.
+4. Add end-of-game scoring, leaderboard, and elimination.
+5. Add replay/sync and real-time updates via WebSocket.
+
+---
+## 19. Short-term Checklist (Next 4 dev tasks)
+- [x] Add backend `POST /api/action/attack` for adjacency-based attacks.
+- [x] Add frontend tile selection + enemy attack UI.
+- [x] Implement population growth tick server-side (every second).
+- [x] Add land ownership percentage and victory display in top UI.
+- [x] Add battle resolution with strength and casualties.
+- [x] Add building placement API and basic city building.
+- [ ] Add unit production and building effects.
+- [ ] Add multiplayer player session flows.
