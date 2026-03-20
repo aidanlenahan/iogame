@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>OpenFront Remake - Alpha</title>
+    <script src="https://pixijs.download/release/pixi.js"></script>
+    <style>
+        body { margin: 0; background: #111; overflow: hidden; }
+        canvas { display: block; }
+        #ui { position: absolute; top: 10px; left: 10px; color: white; font-family: sans-serif; pointer-events: none; }
+    </style>
+</head>
+<body>
+    <div id="ui"><h1>OpenFront Alpha</h1><p>Rendering 10,000 Tiles via WebGL</p></div>
+    <script>
+        const app = new PIXI.Application();
+        
+        async function init() {
+            await app.init({ 
+                width: window.innerWidth, 
+                height: window.innerHeight, 
+                backgroundColor: 0x1099bb,
+                resizeTo: window 
+            });
+            document.body.appendChild(app.canvas);
+
+            const tileSize = 32; // Slightly larger for better visibility
+            const mapContainer = new PIXI.Container();
+            app.stage.addChild(mapContainer);
+
+            // --- CAMERA LOGIC ---
+            let camera = { x: 0, y: 0, speed: 10 };
+            const keys = {};
+
+            window.addEventListener("keydown", e => keys[e.code] = true);
+            window.addEventListener("keyup", e => keys[e.code] = false);
+
+            app.ticker.add(() => {
+                if (keys['KeyW'] || keys['ArrowUp']) camera.y += camera.speed;
+                if (keys['KeyS'] || keys['ArrowDown']) camera.y -= camera.speed;
+                if (keys['KeyA'] || keys['ArrowLeft']) camera.x += camera.speed;
+                if (keys['KeyD'] || keys['ArrowRight']) camera.x -= camera.speed;
+                
+                mapContainer.x = camera.x;
+                mapContainer.y = camera.y;
+            });
+
+            // --- TILE RENDERING ---
+            // We will fetch the real map data from our /api/ later.
+            // For now, let's render the grid visually.
+            for (let x = 0; x < 100; x++) {
+                for (let y = 0; y < 100; y++) {
+                    const tile = new PIXI.Graphics();
+                    // Logic from PRD: Plains (Light Green) vs Mountains (Gray/White)
+                    const isMountain = Math.random() > 0.9; 
+                    const color = isMountain ? 0xbdc3c7 : 0x27ae60;
+                    
+                    tile.beginFill(color);
+                    tile.drawRect(0, 0, tileSize - 2, tileSize - 2); // -2 for a "grid" look
+                    tile.endFill();
+                    
+                    tile.x = x * tileSize;
+                    tile.y = y * tileSize;
+                    
+                    // Add coordinate tooltip logic for later
+                    tile.interactive = true;
+                    tile.on('pointerover', () => tile.alpha = 0.7);
+                    tile.on('pointerout', () => tile.alpha = 1);
+
+                    mapContainer.addChild(tile);
+                }
+            }
+        }
+        init();
+    </script>
+</body>
+</html>
