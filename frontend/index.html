@@ -11,7 +11,7 @@
     </style>
 </head>
 <body>
-    <div id="ui"><h1>OpenFront Alpha</h1><p>Rendering 10,000 Tiles via WebGL</p></div>
+    <div id="ui"><h1>OpenFront Alpha</h1><p>Use left-click to select your tile, click adjacent to attack.</p><p>Shift+click on owned tile to build City (125 gold).</p><p id="stats">Connecting...</p></div>
     <script>
         const app = new PIXI.Application();
         
@@ -46,30 +46,182 @@
             });
 
             // --- TILE RENDERING ---
-            // We will fetch the real map data from our /api/ later.
-            // For now, let's render the grid visually.
-            for (let x = 0; x < 100; x++) {
-                for (let y = 0; y < 100; y++) {
-                    const tile = new PIXI.Graphics();
-                    // Logic from PRD: Plains (Light Green) vs Mountains (Gray/White)
-                    const isMountain = Math.random() > 0.9; 
-                    const color = isMountain ? 0xbdc3c7 : 0x27ae60;
-                    
-                    tile.beginFill(color);
-                    tile.drawRect(0, 0, tileSize - 2, tileSize - 2); // -2 for a "grid" look
-                    tile.endFill();
-                    
-                    tile.x = x * tileSize;
-                    tile.y = y * tileSize;
-                    
-                    // Add coordinate tooltip logic for later
-                    tile.interactive = true;
-                    tile.on('pointerover', () => tile.alpha = 0.7);
-                    tile.on('pointerout', () => tile.alpha = 1);
+            const terrainColors = {
+                plains: 0x27ae60,
+                desert: 0xf1c40f,
+                mountain: 0xbdc3c7,
+                water: 0x3498db,
+                radioactive: 0x2ecc71
+            };
 
-                    mapContainer.addChild(tile);
+            let mapTiles = [];
+            let selected = null;
+
+            function isAdjacent(a, b) {
+                return Math.abs(a.x - b.x) + Math.abs(a.y - b.y) === 1;
+            }
+
+            function drawUI(text) {
+                document.getElementById('ui').innerHTML = `<h1>OpenFront Alpha</h1><p>${text}</p>`;
+            }
+
+            async function refreshMap() {
+                const res = await fetch('/api/map');
+                const data = await res.json();
+                return data;
+            }
+
+            function drawMap(mapData) {
+                mapContainer.removeChildren();
+                mapTiles = [];
+
+                const mapRows = mapData.map;
+                for (let y = 0; y < mapRows.length; y++) {
+                    mapTiles[y] = [];
+                    for (let x = 0; x < mapRows[y].length; x++) {
+                        const tileModel = mapRows[y][x];
+                        const tile = new PIXI.Graphics();
+                        const baseColor = terrainColors[tileModel.type] ?? terrainColors.plains;
+                        const ownerColor = tileModel.owner === 'player1' ? 0xff4d4f : tileModel.owner === 'neutral' ? 0x000000 : 0x999999;
+
+                        tile.beginFill(baseColor);
+                        tile.drawRect(0, 0, tileSize - 2, tileSize - 2);
+                        tile.endFill();
+
+                        if (tileModel.owner !== 'neutral') {
+                            tile.beginFill(ownerColor, 0.25);
+                            tile.drawRect(0, 0, tileSize - 2, tileSize - 2);
+                            tile.endFill();
+                        }
+                        if (tileModel.building === 'city') {
+                            tile.beginFill(0x333333);
+                            tile.drawRect(tileSize/4, tileSize/4, tileSize/2, tileSize/2);
+                            tile.endFill();
+                        }
+                        tile.x = x * tileSize;
+                        tile.y = y * tileSize;
+                        tile.interactive = true;
+                        tile.buttonMode = true;
+
+                        tile.on('pointerover', () => {
+                            tile.alpha = 0.7;
+                            drawUI(`Tile ${x},${y} | ${tileModel.type} | owner: ${tileModel.owner}`);
+                        });
+                        tile.on('pointerout', () => {
+                            tile.alpha = 1;
+                            if (!selected) {
+                                drawUI('Rendering 10,000 Tiles via WebGL');
+                            }
+                        });
+
+                        tile.on('pointerdown', async (event) => {
+                            if (event.shiftKey) {
+                                if (tileModel.owner !== 'player1') {
+                                    drawUI('You must own this tile to build.');
+                                    return;
+                                }
+                                if (tileModel.building) {
+                                    drawUI('Tile already has a building.');
+                                    return;
+                                }
+                                const buildRes = await fetch('/building', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ x, y, player: 'player1', type: 'city' })
+                                });
+                                const buildData = await buildRes.json();
+                                if (!buildRes.ok) {
+                                    drawUI(`Build failed: ${buildData.error || 'unknown'}`);
+                                } else {
+                                    drawUI('City built!');
+                                }
+                                await renderCurrentMap();
+                                return;
+                            }
+                            const current = { x, y, owner: tileModel.owner };
+
+                            if (!selected) {
+                                if (tileModel.owner !== 'player1') {
+                                    drawUI('Select your own tile first.');
+                                    return;
+                                }
+                                selected = current;
+                                tile.lineStyle(2, 0xffffff);
+                                tile.drawRect(0, 0, tileSize - 2, tileSize - 2);
+                                drawUI(`Selected ${x},${y}. Click adjacent tile to attack.`);
+                                return;
+                            }
+
+                            if (selected.x === x && selected.y === y) {
+                                selected = null;
+                                drawUI('Selection cleared.');
+                                await renderCurrentMap();
+                                return;
+                            }
+
+                            if (!isAdjacent(selected, current)) {
+                                drawUI('Target not adjacent. Select adjacent tile only.');
+                                return;
+                            }
+
+                            const attackRes = await fetch('/api/action/attack', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ fromX: selected.x, fromY: selected.y, toX: x, toY: y, player: 'player1' })
+                            });
+
+                            const result = await attackRes.json();
+                            if (!attackRes.ok) {
+                                drawUI(`Attack failed: ${result.error || 'unknown'}`);
+                            } else {
+                                drawUI(result.message);
+
+                            }
+                            selected = null;
+                            await renderCurrentMap();
+                        });
+
+                        mapContainer.addChild(tile);
+                        mapTiles[y][x] = tile;
+                    }
                 }
             }
+
+            async function refreshPlayer() {
+                const res = await fetch('/api/player/1');
+                const data = await res.json();
+                const stats = data.player;
+                const mapStats = data.stats;
+                const win = data.win;
+                if (stats && mapStats) {
+                    document.getElementById('stats').innerHTML =
+                        `Population: ${stats.pop} | Gold: ${stats.gold} | Control: ${mapStats.controlPct}%`;
+                    if (win) {
+                        document.getElementById('stats').innerHTML += ' | 🎉 VICTORY!';
+                    }
+                }
+                return mapStats;
+            }
+
+            async function renderCurrentMap() {
+                const data = await refreshMap();
+                const mapData = data.map;
+                const mapStats = data.stats;
+                const win = data.win;
+                drawMap({ map: mapData, stats: mapStats, win });
+                document.getElementById('stats').innerHTML = `Population: ${data.player.pop} | Gold: ${data.player.gold} | Cap: ${data.player.cap} | Control: ${mapStats.controlPct}%`;
+                if (win) {
+                    document.getElementById('stats').innerHTML += ' | 🎉 VICTORY!';
+                }
+                return mapStats;
+            }
+
+            setInterval(async () => {
+                const data = await refreshMap();
+                document.getElementById('stats').innerHTML = `Population: ${data.player.pop} | Gold: ${data.player.gold} | Control: ${data.stats.controlPct}%`;
+            }, 1000);
+
+            await renderCurrentMap();
         }
         init();
     </script>

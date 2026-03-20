@@ -20,3 +20,4 @@ docker-compose.override.yml
 # Backend Build (if you move to TypeScript later)
 dist/
 build/
+tmp/
