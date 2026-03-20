@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+.npm/
+package-lock.json
+
+# Environment / Secrets
+.env
+.env.local
+
+# OS / IDE Files
+.DS_Store
+.vscode/
+.idea/
+Thumbs.db
+
+# Docker / Logs
+*.log
+docker-compose.override.yml
+
+# Backend Build (if you move to TypeScript later)
+dist/
+build/
