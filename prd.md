@@ -763,37 +763,41 @@ To prioritize the most basic and important tasks first, development is divided i
 ## 17. Current Implementation Status (Alpha Build)
 
 ### 17.1 Completed (Working Now)
-- Backend map generation + Redis storage for 100x100 tiles.
+- Backend map generation + Redis storage for 50x40 tiles.
 - API endpoints:
-  - `GET /api/map` returns the full tile map.
-  - `GET /api/tile/:x/:y` returns a specific tile.
-  - `POST /api/tile/:x/:y` updates ownership/type/pop.
-- Frontend Pixi.js rendering of the world map using backend tile data.
-- Tile hover UI details and clickable capture action.
-- Backend adjacency-validated attack action (`POST /api/action/attack`) implemented.
-- Backend population tick and player resources implemented.
-- Control percentage and victory detection added (80% non-radioactive land).
-- Docker compose setup with nginx reverse proxy and backend services.
+  - `GET /api/map` returns the full tile map, player state, and control stats.
+  - `GET /api/player/1` returns player state and win status.
+  - `POST /tile/:x/:y` updates tile characteristics.
+  - `POST /api/action/attack` validates adjacency, computes terrain modifiers, handles casualties, and updates territory.
+  - `POST /building` builds cities with gold and cap updates.
+  - `POST /api/reset` resets map and player state.
+  - `POST /api/start` initializes/reset game state.
+- Frontend Pixi.js rendering of map tiles with terrain and ownership overlays.
+- Left-click tile selection and adjacent attack flow.
+- Shift+click on owned tile to build city.
+- Auto-refresh scoreboard and win detection in the UI.
+- Backend periodic ticks for population growth and bot AI attacks.
+- Workable Docker environment with nginx and proxy to backend.
 
 ### 17.2 Current Gaps (Alpha to Beta Transition)
-- Basic battle resolution is now implemented (strength, casualties, terrain modifiers).
-- No building/unit production systems yet.
-- Population growth and troop/worker system not implemented in gameplay.
-- No player/session state, authentication, or multiplayer sync.
-- No persistent match lifecycle (start/end conditions) in backend.
-- UI currently draws static tile grid with basic interaction only.
+- Troop/worker split system not yet exposed in UI.
+- Full building menu (other buildings beyond city) not implemented.
+- No multiplayer sessions or authentication.
+- No diplomacy, no naval units, no nuclear system.
+- Defense post and advanced combat modifiers still missing.
+- No robust persistent user state across matches beyond Redis ephemeral map data.
 
 ---
 ## 18. Updated Engineering TODO (Next 2-3 Sprints)
 
 ### Sprint 1 (Core Gameplay Loop)
 1. Implement adjacency validation and tile combat in backend:
-   - Only allow actions on neighboring tiles.
-   - Resolve attack with simple strength formula plus terrain modifiers.
-2. Add tile ownership color state and occupant markers in frontend.
-3. Add passive population growth per tile and base tile population (+3) logic.
-4. Add player resources (gold/pop) and UI counters.
-5. Add win condition check: own >= 80% non-radioactive land.
+   - Only allow actions on neighboring tiles. ✅
+   - Resolve attack with simple strength formula plus terrain modifiers. ✅
+2. Add tile ownership color state and occupant markers in frontend. ✅
+3. Add passive population growth per tile and base tile population (+3) logic. ✅
+4. Add player resources (gold/pop) and UI counters. ✅
+5. Add win condition check: own >= 80% non-radioactive land. ✅
 
 ### Sprint 2 (Buildings + Units + Economy)
 1. Implement building placement API (`/api/building`) and UI build menu.
