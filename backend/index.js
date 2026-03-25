@@ -4,7 +4,18 @@ const fs = require('fs');
 const path = require('path');
 
 const SEED_PATH = path.join(__dirname, 'data', 'world_map_seed.json');
+const TARGET_PIXEL_MULTIPLIER = 15;
+const MAP_DENSITY_VERSION = 'density-15x-v1';
 let worldSeed = null;
+
+// ── In-memory caches (avoid re-serializing 192K tiles on every request) ─────────
+const mapJSONCache   = {}; // matchId -> raw JSON string of map_grid
+const mapStatsCache  = {}; // matchId -> computed computeMapStats() result
+let   serverTick     = 0;
+const changesByTick  = new Map(); // tick -> [{x,y,tile}]
+let   pendingTickChanges = [];
+const MAX_TICK_HISTORY   = 20;   // keep ~50 s of history at 2500ms client interval
+
 function loadSeed() {
   if (!worldSeed) {
     worldSeed = JSON.parse(fs.readFileSync(SEED_PATH, 'utf8'));
@@ -53,8 +64,10 @@ function computeMapStats(map) {
 }
 
 async function getMap(matchId = 'default') {
+  if (mapJSONCache[matchId]) return JSON.parse(mapJSONCache[matchId]);
   const raw = await redisClient.get(`match:${matchId}:map_grid`);
   if (!raw) return null;
+  mapJSONCache[matchId] = raw;
   return JSON.parse(raw);
 }
 
@@ -205,12 +218,17 @@ async function updateTile(x, y, update, matchId = 'default') {
     pop:      String(merged.pop),
     building: String(merged.building)
   });
-  const mapRaw = await redisClient.get(`match:${matchId}:map_grid`);
+  // Use cached string to avoid a Redis round-trip + re-parse on every tile update
+  const mapRaw = mapJSONCache[matchId] || await redisClient.get(`match:${matchId}:map_grid`);
   if (mapRaw) {
     const map = JSON.parse(mapRaw);
     if (map[y] && map[y][x]) {
       map[y][x] = merged;
-      await redisClient.set(`match:${matchId}:map_grid`, JSON.stringify(map));
+      const newJSON = JSON.stringify(map);
+      await redisClient.set(`match:${matchId}:map_grid`, newJSON);
+      mapJSONCache[matchId]  = newJSON;  // keep cache in sync
+      delete mapStatsCache[matchId];     // invalidate stats cache
+      pendingTickChanges.push({ x, y, tile: merged }); // queue for diff endpoint
     }
   }
   return merged;
@@ -284,7 +302,7 @@ async function growPopulationTick(matchId = 'default') {
   }
 }
 
-async function initGame(matchId = 'default', startX = 10, startY = 35, botX = 130, botY = 35) {
+async function initGame(matchId = 'default', startX = 22, startY = 78, botX = 291, botY = 78) {
   if (!redisClient.isOpen) {
     await redisClient.connect();
     console.log('Connected to Redis!');
@@ -292,27 +310,68 @@ async function initGame(matchId = 'default', startX = 10, startY = 35, botX = 13
 
   const mapKey = `match:${matchId}:map_grid`;
   const initKey = `match:${matchId}:map_initialized`;
-  const mapInitialized = await redisClient.exists(initKey);
+  const metaKey = `match:${matchId}:map_meta`;
+  let mapInitialized = await redisClient.exists(initKey);
+  const mapMeta = await redisClient.hGetAll(metaKey);
+  if (mapInitialized && mapMeta.densityVersion !== MAP_DENSITY_VERSION) {
+    await resetGame(matchId);
+    mapInitialized = 0;
+  }
   if (!mapInitialized) {
     console.log(`Loading world seed for match ${matchId}...`);
     const seed = loadSeed();
-    const height = seed.length;       // 80
-    const width  = seed[0].length;    // 160
+    const seedHeight = seed.length;
+    const seedWidth = seed[0].length;
+    const axisScale = Math.sqrt(TARGET_PIXEL_MULTIPLIER);
+    const height = Math.max(seedHeight, Math.round(seedHeight * axisScale));
+    const width = Math.max(seedWidth, Math.round(seedWidth * axisScale));
     const map = [];
+
+    function getSeedTile(x, y) {
+      const fx = ((x + 0.5) * seedWidth) / width - 0.5;
+      const fy = ((y + 0.5) * seedHeight) / height - 0.5;
+      const x0 = clamp(Math.floor(fx), 0, seedWidth - 1);
+      const y0 = clamp(Math.floor(fy), 0, seedHeight - 1);
+      const x1 = clamp(x0 + 1, 0, seedWidth - 1);
+      const y1 = clamp(y0 + 1, 0, seedHeight - 1);
+      const tx = fx - Math.floor(fx);
+      const ty = fy - Math.floor(fy);
+
+      const weighted = new Map();
+      const add = (tile, weight) => {
+        const key = `${tile.type}|${tile.country || ''}`;
+        const prev = weighted.get(key) || { score: 0, tile };
+        prev.score += weight;
+        weighted.set(key, prev);
+      };
+
+      add(seed[y0][x0], (1 - tx) * (1 - ty));
+      add(seed[y0][x1], tx * (1 - ty));
+      add(seed[y1][x0], (1 - tx) * ty);
+      add(seed[y1][x1], tx * ty);
+
+      let best = null;
+      for (const candidate of weighted.values()) {
+        if (!best || candidate.score > best.score) best = candidate;
+      }
+      return best ? best.tile : seed[y0][x0];
+    }
 
     // Find nearest land cell to a requested spawn coordinate
     function nearestLand(tx, ty) {
-      if (seed[ty] && seed[ty][tx] && seed[ty][tx].type !== 'water') return { x: tx, y: ty };
+      const cx = clamp(Math.floor(tx), 0, width - 1);
+      const cy = clamp(Math.floor(ty), 0, height - 1);
+      if (getSeedTile(cx, cy).type !== 'water') return { x: cx, y: cy };
       for (let r = 1; r < 20; r++) {
         for (let dy = -r; dy <= r; dy++) {
           for (let dx = -r; dx <= r; dx++) {
-            const nx = tx + dx, ny = ty + dy;
+            const nx = cx + dx, ny = cy + dy;
             if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
-            if (seed[ny][nx].type !== 'water') return { x: nx, y: ny };
+            if (getSeedTile(nx, ny).type !== 'water') return { x: nx, y: ny };
           }
         }
       }
-      return { x: tx, y: ty };
+      return { x: cx, y: cy };
     }
 
     const p1spawn  = nearestLand(startX, startY);
@@ -321,7 +380,7 @@ async function initGame(matchId = 'default', startX = 10, startY = 35, botX = 13
     for (let y = 0; y < height; y++) {
       const row = [];
       for (let x = 0; x < width; x++) {
-        const seedTile = seed[y][x];
+        const seedTile = getSeedTile(x, y);
         let owner = 'neutral';
         if (x === p1spawn.x  && y === p1spawn.y)  owner = 'player1';
         if (x === bot1spawn.x && y === bot1spawn.y) owner = 'bot1';
@@ -344,6 +403,11 @@ async function initGame(matchId = 'default', startX = 10, startY = 35, botX = 13
       map.push(row);
     }
     await redisClient.set(mapKey, JSON.stringify(map));
+    await safeHSet(metaKey, {
+      width: String(width),
+      height: String(height),
+      densityVersion: MAP_DENSITY_VERSION
+    });
     await safeHSet(`match:${matchId}:player:player1`, { pop: '1000', troops: '800', workers: '200', gold: '1000', cap: '100000', troopRatio: '80', eliminated: 'false' });
     await safeHSet(`match:${matchId}:player:bot1`,    { pop: '500',  troops: '400', workers: '100', gold: '500',  cap: '100000', troopRatio: '80', eliminated: 'false' });
     await redisClient.set(initKey, 'true');
@@ -392,6 +456,7 @@ async function botAttackTick(matchId = 'default') {
 
 async function resetGame(matchId = 'default') {
   await redisClient.del(`match:${matchId}:map_initialized`);
+  await redisClient.del(`match:${matchId}:map_meta`);
   for (const key of await redisClient.keys(`match:${matchId}:tile:*`)) {
     await redisClient.del(key);
   }
@@ -402,6 +467,12 @@ async function resetGame(matchId = 'default') {
     await redisClient.del(key);
   }
   await redisClient.del(`match:${matchId}:map_grid`);
+  // Clear in-memory caches so the next request starts fresh
+  delete mapJSONCache[matchId];
+  delete mapStatsCache[matchId];
+  pendingTickChanges = [];
+  changesByTick.clear();
+  serverTick = 0;
 }
 
 async function start() {
@@ -409,6 +480,15 @@ async function start() {
   setInterval(() => growPopulationTick('default'), 1000);
   setInterval(() => botAttackTick('default'), 2500);
   setInterval(() => processAttackOrdersTick('default'), 500);
+  // Flush pending tile changes into tick history for the /api/map/diff endpoint
+  setInterval(() => {
+    serverTick++;
+    if (pendingTickChanges.length > 0) {
+      changesByTick.set(serverTick, [...pendingTickChanges]);
+      pendingTickChanges = [];
+    }
+    changesByTick.delete(serverTick - MAX_TICK_HISTORY);
+  }, 2500);
 
   const server = http.createServer(async (req, res) => {
     try {
@@ -420,7 +500,9 @@ async function start() {
         const map = await getMap(matchId);
         const player = await getPlayer('player1', matchId);
         const pendingAttacks = await getPendingAttackCount('player1', matchId);
-        const stats = map ? computeMapStats(map) : { total: 0, nonRadioactive: 0, ownership: {}, playerStats: {} };
+        // Use cached stats — recalculate only when updateTile() invalidated the cache
+        if (!mapStatsCache[matchId] && map) mapStatsCache[matchId] = computeMapStats(map);
+        const stats = mapStatsCache[matchId] || { total: 0, nonRadioactive: 0, ownership: {}, playerStats: {} };
         const player1ControlPct = stats.playerStats['player1'] || 0;
         const win = player1ControlPct >= 80;
         const allPlayerKeys = await redisClient.keys(`match:${matchId}:player:*`);
@@ -438,9 +520,52 @@ async function start() {
           });
         }
         scoreboard.sort((a, b) => b.controlPct - a.controlPct);
-        const gameState = { map, player, stats: { ...stats, controlPct: player1ControlPct, pendingAttacks }, win, matchId, scoreboard };
+        // Embed the raw map JSON string directly to avoid re-serializing 192K tiles
+        const mapJSON = mapJSONCache[matchId] || JSON.stringify(map);
+        const metaJSON = JSON.stringify({ player, stats: { ...stats, controlPct: player1ControlPct, pendingAttacks }, win, matchId, scoreboard, serverTick });
+        const meta = JSON.parse(metaJSON);
         res.writeHead(200, {'Content-Type': 'application/json'});
-        res.end(JSON.stringify(gameState));
+        res.end(`{"map":${mapJSON},"player":${JSON.stringify(meta.player)},"stats":${JSON.stringify(meta.stats)},"win":${meta.win},"matchId":${JSON.stringify(meta.matchId)},"scoreboard":${JSON.stringify(meta.scoreboard)},"serverTick":${meta.serverTick}}`);
+        return;
+      }
+
+      if (req.method === 'GET' && path === '/map/diff') {
+        const since = parseInt(url.searchParams.get('since') || '0', 10);
+        // If client is too far behind, tell it to do a full reload
+        if (serverTick > MAX_TICK_HISTORY && since < serverTick - MAX_TICK_HISTORY) {
+          res.writeHead(200, {'Content-Type': 'application/json'});
+          res.end(JSON.stringify({ needsFullRefresh: true, serverTick }));
+          return;
+        }
+        // Collect changes since requested tick (de-duplicate: keep newest state per tile)
+        const seenTiles = new Set();
+        const changes = [];
+        for (let t = serverTick; t > since; t--) {
+          const tChanges = changesByTick.get(t) || [];
+          for (const c of tChanges) {
+            const key = `${c.x}:${c.y}`;
+            if (!seenTiles.has(key)) { seenTiles.add(key); changes.push(c); }
+          }
+        }
+        const player = await getPlayer('player1', matchId);
+        if (!mapStatsCache[matchId]) {
+          const m = await getMap(matchId);
+          if (m) mapStatsCache[matchId] = computeMapStats(m);
+        }
+        const stats = mapStatsCache[matchId] || { total: 0, nonRadioactive: 0, ownership: {}, playerStats: {} };
+        const player1ControlPct = stats.playerStats['player1'] || 0;
+        const pendingAttacks = await getPendingAttackCount('player1', matchId);
+        const win = player1ControlPct >= 80;
+        const allPlayerKeys = await redisClient.keys(`match:${matchId}:player:*`);
+        const scoreboard = [];
+        for (const key of allPlayerKeys) {
+          const pid = key.replace(`match:${matchId}:player:`, '');
+          const pd = await redisClient.hGetAll(key);
+          scoreboard.push({ id: pid, troops: Number(pd.troops || 0), workers: Number(pd.workers || 0), gold: Number(pd.gold || 0), eliminated: pd.eliminated === 'true', controlPct: stats.playerStats[pid] || 0 });
+        }
+        scoreboard.sort((a, b) => b.controlPct - a.controlPct);
+        res.writeHead(200, {'Content-Type': 'application/json'});
+        res.end(JSON.stringify({ serverTick, needsFullRefresh: false, changes, player, stats: { ...stats, controlPct: player1ControlPct, pendingAttacks }, win, matchId, scoreboard }));
         return;
       }
 
