@@ -69,6 +69,7 @@
       <button id="startBtn">Start Match (Choose Start Tile)</button>
       <button id="toggleAuto">Auto-Refresh: ON</button><br/>
       <div style="color:#fff;margin-top:4px;font-size:12px;">Start tile: <span id="startTile">0,0</span> (click neutral tile to set)</div>
+            <div style="color:#fff;margin-top:2px;font-size:12px;">Map: <span id="mapDims">-</span> | Zoom: <span id="zoomValue">1.00x</span></div>
       <label style="font-size:12px;color:#fff;">Troop Ratio: <span id="ratioValue">80%</span></label><br/>
       <input id="ratioSlider" type="range" min="10" max="90" value="80" style="width:150px;" />
     </div>
@@ -85,14 +86,60 @@
             });
             document.body.appendChild(app.canvas);
 
-            const tileSize = 8;
-            const tileGap = 1;
+            const tileSize = 0.6;
+            const tileGap = 0;
+            const outlineWidth = Math.max(0.4, tileSize * 0.5);
+            const maxZoom = 24;
             const mapContainer = new PIXI.Container();
             app.stage.addChild(mapContainer);
 
             let camera = { x: 0, y: 0, speed: 8 };
             let zoom = 1;
+            let mapPixelWidth = 1;
+            let mapPixelHeight = 1;
+            let hasInitializedView = false;
             mapContainer.scale.set(zoom);
+
+            function getMinZoom() {
+                return Math.min(window.innerWidth / mapPixelWidth, window.innerHeight / mapPixelHeight);
+            }
+
+            function clampZoom(nextZoom) {
+                const minZoom = getMinZoom();
+                return Math.min(maxZoom, Math.max(minZoom, nextZoom));
+            }
+
+            function clampCamera() {
+                const scaledW = mapPixelWidth * zoom;
+                const scaledH = mapPixelHeight * zoom;
+                if (scaledW >= window.innerWidth) {
+                    camera.x = Math.min(0, Math.max(window.innerWidth - scaledW, camera.x));
+                } else {
+                    camera.x = (window.innerWidth - scaledW) / 2;
+                }
+                if (scaledH >= window.innerHeight) {
+                    camera.y = Math.min(0, Math.max(window.innerHeight - scaledH, camera.y));
+                } else {
+                    camera.y = (window.innerHeight - scaledH) / 2;
+                }
+            }
+
+            function fitMapInView() {
+                zoom = clampZoom(zoom);
+                mapContainer.scale.set(zoom);
+                camera.x = (window.innerWidth - mapPixelWidth * zoom) / 2;
+                camera.y = (window.innerHeight - mapPixelHeight * zoom) / 2;
+                clampCamera();
+                mapContainer.x = camera.x;
+                mapContainer.y = camera.y;
+                const zoomLabel = document.getElementById('zoomValue');
+                if (zoomLabel) zoomLabel.textContent = `${zoom.toFixed(2)}x`;
+            }
+
+            window.addEventListener('resize', () => {
+                if (!mapPixelWidth || !mapPixelHeight) return;
+                fitMapInView();
+            });
 
             window.addEventListener('wheel', (e) => {
                 e.preventDefault();
@@ -104,10 +151,15 @@
                 const worldX = (cursorX - camera.x) / oldZoom;
                 const worldY = (cursorY - camera.y) / oldZoom;
 
-                zoom = Math.min(4, Math.max(0.35, zoom - e.deltaY * 0.0016));
+                zoom = clampZoom(zoom - e.deltaY * 0.0016);
                 camera.x = cursorX - worldX * zoom;
                 camera.y = cursorY - worldY * zoom;
+                clampCamera();
                 mapContainer.scale.set(zoom);
+                mapContainer.x = camera.x;
+                mapContainer.y = camera.y;
+                const zoomLabel = document.getElementById('zoomValue');
+                if (zoomLabel) zoomLabel.textContent = `${zoom.toFixed(2)}x`;
             }, { passive: false });
 
             app.view.addEventListener('pointerdown', (e) => {
@@ -119,6 +171,7 @@
                 if (!dragging || !dragStart) return;
                 camera.x = dragStart.camX + (e.clientX - dragStart.x);
                 camera.y = dragStart.camY + (e.clientY - dragStart.y);
+                clampCamera();
             });
             app.view.addEventListener('pointerup', () => { dragging = false; });
             app.view.addEventListener('pointerleave', () => { dragging = false; });
@@ -132,6 +185,7 @@
                 if (keys['KeyS'] || keys['ArrowDown']) camera.y -= camera.speed;
                 if (keys['KeyA'] || keys['ArrowLeft']) camera.x += camera.speed;
                 if (keys['KeyD'] || keys['ArrowRight']) camera.x -= camera.speed;
+                clampCamera();
                 mapContainer.x = camera.x;
                 mapContainer.y = camera.y;
             });
@@ -145,13 +199,26 @@
                 snow:        0xe8eaf0    // near-white
             };
 
-            let mapTiles = [];
+            let mapTiles = [];  // now stores tile-data objects, not PIXI.Graphics
             let selected = null;
             let startPosition = { x: 0, y: 0 };
             let pretendStart = true;
             let gameState = { win: false, player: { eliminated: false } };
             let dragging = false;
             let dragStart = null;
+
+            // ── Flat-layer rendering state (persists across refreshes) ────────
+            let mapInitialized = false;
+            let mapWidth = 0;
+            let mapHeight = 0;
+            let terrainGfx = null;   // drawn once; never changes
+            let ownerGfx = null;     // redrawn when ownership changes
+            let buildingGfx = null;  // redrawn when buildings change
+            let hoverGfx = null;     // single-tile hover highlight
+            let selectionGfx = null; // selection + start-position outlines
+            let lastHoverTile = null;
+            let clientTick = 0;      // server tick we last synced to
+            let localMapData = null; // client-side copy maintained by refreshMapForInterval
 
             function drawUI(text) {
                 const ui = document.getElementById('ui');
@@ -269,167 +336,241 @@
             async function refreshMap() {
                 const res = await fetch('/api/map');
                 const data = await res.json();
+                localMapData = data.map;
+                clientTick = data.serverTick || 0;
                 return data;
             }
 
-            function drawMap(mapData) {
-                mapContainer.removeChildren();
-                mapTiles = [];
+            async function refreshMapForInterval() {
+                if (!localMapData || clientTick === 0) return refreshMap();
+                try {
+                    const res = await fetch(`/api/map/diff?since=${clientTick}`);
+                    const diff = await res.json();
+                    if (diff.needsFullRefresh) return refreshMap();
+                    for (const { x, y, tile } of (diff.changes || [])) {
+                        if (localMapData[y] && localMapData[y][x]) localMapData[y][x] = tile;
+                    }
+                    clientTick = diff.serverTick || clientTick;
+                    return { map: localMapData, player: diff.player, stats: diff.stats,
+                             win: diff.win, scoreboard: diff.scoreboard };
+                } catch (_) { return refreshMap(); }
+            }
 
-                const mapRows = mapData.map;
-                for (let y = 0; y < mapRows.length; y++) {
-                    mapTiles[y] = [];
-                    for (let x = 0; x < mapRows[y].length; x++) {
-                        const tileModel = mapRows[y][x];
-                        const tile = new PIXI.Graphics();
-                        const baseColor = terrainColors[tileModel.type] ?? terrainColors.plains;
-                        const ownerColor = tileModel.owner === 'player1' ? 0xff4d4f : tileModel.owner === 'neutral' ? 0x000000 : 0x999999;
+            // ── Rendering helpers ──────────────────────────────────
+            function getLocalPos(e) {
+                return e.data ? e.data.getLocalPosition(mapContainer) : e.getLocalPosition(mapContainer);
+            }
 
-                        tile.beginFill(baseColor);
-                        tile.drawRect(0, 0, tileSize - tileGap, tileSize - tileGap);
-                        tile.endFill();
-
-                        if (tileModel.owner !== 'neutral') {
-                            tile.beginFill(ownerColor, 0.25);
-                            tile.drawRect(0, 0, tileSize - tileGap, tileSize - tileGap);
-                            tile.endFill();
+            function redrawDynamicLayers() {
+                ownerGfx.clear();
+                buildingGfx.clear();
+                for (let y = 0; y < mapHeight; y++) {
+                    for (let x = 0; x < mapWidth; x++) {
+                        const t = mapTiles[y][x];
+                        if (t.owner !== 'neutral') {
+                            const c = t.owner === 'player1' ? 0xff4d4f : 0x999999;
+                            ownerGfx.beginFill(c, 0.25);
+                            ownerGfx.drawRect(x * tileSize, y * tileSize, tileSize - tileGap, tileSize - tileGap);
+                            ownerGfx.endFill();
                         }
-                        if (tileModel.building === 'city') {
-                            tile.beginFill(0x333333);
-                            tile.drawRect(tileSize/4, tileSize/4, tileSize/2, tileSize/2);
-                            tile.endFill();
+                        if (t.building === 'city') {
+                            buildingGfx.beginFill(0x333333);
+                            buildingGfx.drawRect(x * tileSize + tileSize / 4, y * tileSize + tileSize / 4, tileSize / 2, tileSize / 2);
+                            buildingGfx.endFill();
                         }
-                        if (pretendStart && x === startPosition.x && y === startPosition.y) {
-                            tile.lineStyle(2, 0xffff00);
-                            tile.drawRect(0, 0, tileSize - tileGap, tileSize - tileGap);
-                        }
-                        tile.x = x * tileSize;
-                        tile.y = y * tileSize;
-                        tile.interactive = true;
-                        tile.buttonMode = true;
-
-                        tile.on('pointerover', () => {
-                            tile.alpha = 0.7;
-                            const countryLabel = tileModel.country ? ` | ${tileModel.country}` : '';
-                            drawUI(`Tile ${x},${y} | ${tileModel.type}${countryLabel} | owner: ${tileModel.owner}`);
-                        });
-                        tile.on('pointerout', () => {
-                            tile.alpha = 1;
-                        });
-
-                        tile.on('pointerdown', async (event) => {
-                            if (gameState.win || gameState.eliminated) {
-                                drawUI('Game over. Press Start/Reset to play again.');
-                                return;
-                            }
-                            if (pretendStart) {
-                                if (tileModel.type === 'water') {
-                                    drawUI('Pick a land tile for your start position.');
-                                    return;
-                                }
-                                if (tileModel.owner !== 'neutral') {
-                                    drawUI('Pick a neutral tile for your start position.');
-                                    return;
-                                }
-                                startPosition = { x, y };
-                                document.getElementById('startTile').textContent = `${x},${y}`;
-                                drawUI(`Start position selected at ${x},${y}. Click Start Match.`);
-                                return;
-                            }
-                            if (event.shiftKey) {
-                                if (tileModel.owner !== 'player1') {
-                                    drawUI('You must own this tile to build.');
-                                    return;
-                                }
-                                if (tileModel.building) {
-                                    drawUI('Tile already has a building.');
-                                    return;
-                                }
-                                const buildRes = await fetch('/building', {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ x, y, player: 'player1', type: 'city' })
-                                });
-                                const buildData = await buildRes.json();
-                                if (!buildRes.ok) {
-                                    drawUI(`Build failed: ${buildData.error || 'unknown'}`);
-                                } else {
-                                    drawUI('City built!');
-                                }
-                                await renderCurrentMap();
-                                return;
-                            }
-                            const current = { x, y, owner: tileModel.owner };
-
-                            if (!selected) {
-                                if (tileModel.owner !== 'player1') {
-                                    drawUI('Select your own tile first.');
-                                    return;
-                                }
-                                selected = current;
-                                tile.lineStyle(2, 0xffffff);
-                                tile.drawRect(0, 0, tileSize - tileGap, tileSize - tileGap);
-                                drawUI(`Selected ${x},${y}. Click any enemy/neutral land tile to send troops.`);
-                                return;
-                            }
-
-                            if (selected.x === x && selected.y === y) {
-                                selected = null;
-                                drawUI('Selection cleared.');
-                                await renderCurrentMap();
-                                return;
-                            }
-
-                            if (tileModel.type === 'water') {
-                                drawUI('Cannot attack water tiles.');
-                                return;
-                            }
-
-                            const attackRes = await fetch('/api/action/attack', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ fromX: selected.x, fromY: selected.y, toX: x, toY: y, player: 'player1' })
-                            });
-
-                            const result = await attackRes.json();
-                            if (!attackRes.ok) {
-                                drawUI(`Attack failed: ${result.error || 'unknown'}`);
-                            } else {
-                                drawUI(result.message);
-                            }
-                            selected = null;
-                            await renderCurrentMap();
-                        });
-
-                        mapContainer.addChild(tile);
-                        mapTiles[y][x] = tile;
                     }
                 }
             }
 
-            async function refreshPlayer() {
-                const res = await fetch('/api/player/1');
-                const data = await res.json();
-                return data;
+            function redrawSelectionLayer() {
+                selectionGfx.clear();
+                if (pretendStart) {
+                    selectionGfx.lineStyle(outlineWidth, 0xffff00);
+                    selectionGfx.drawRect(startPosition.x * tileSize, startPosition.y * tileSize, tileSize - tileGap, tileSize - tileGap);
+                }
+                if (selected) {
+                    selectionGfx.lineStyle(outlineWidth, 0xffffff);
+                    selectionGfx.drawRect(selected.x * tileSize, selected.y * tileSize, tileSize - tileGap, tileSize - tileGap);
+                }
+            }
+
+            function initMap(mapRows) {
+                mapContainer.removeChildren();
+                mapHeight = mapRows.length;
+                mapWidth  = mapRows[0] ? mapRows[0].length : 0;
+                mapPixelHeight = mapHeight * tileSize;
+                mapPixelWidth  = mapWidth  * tileSize;
+                const mapDimsLabel = document.getElementById('mapDims');
+                if (mapDimsLabel) mapDimsLabel.textContent = `${mapWidth}x${mapHeight}`;
+
+                terrainGfx  = new PIXI.Graphics();
+                ownerGfx    = new PIXI.Graphics();
+                buildingGfx = new PIXI.Graphics();
+                hoverGfx    = new PIXI.Graphics();
+                selectionGfx= new PIXI.Graphics();
+                mapContainer.addChild(terrainGfx, ownerGfx, buildingGfx, hoverGfx, selectionGfx);
+
+                // Store tile data & draw terrain layer once (never redrawn)
+                mapTiles = [];
+                for (let y = 0; y < mapHeight; y++) {
+                    mapTiles[y] = [];
+                    for (let x = 0; x < mapWidth; x++) {
+                        mapTiles[y][x] = mapRows[y][x];
+                        const baseColor = terrainColors[mapRows[y][x].type] ?? terrainColors.plains;
+                        terrainGfx.beginFill(baseColor);
+                        terrainGfx.drawRect(x * tileSize, y * tileSize, tileSize - tileGap, tileSize - tileGap);
+                        terrainGfx.endFill();
+                    }
+                }
+                redrawDynamicLayers();
+                redrawSelectionLayer();
+
+                // Container-level pointer events (replaces 192,200 individual tile handlers)
+                mapContainer.interactive = true;
+                mapContainer.hitArea = new PIXI.Rectangle(0, 0, mapPixelWidth, mapPixelHeight);
+                let pDownPos = null;
+
+                mapContainer.on('pointermove', (e) => {
+                    const local = getLocalPos(e);
+                    const tx = Math.floor(local.x / tileSize);
+                    const ty = Math.floor(local.y / tileSize);
+                    if (tx < 0 || ty < 0 || tx >= mapWidth || ty >= mapHeight) {
+                        hoverGfx.clear(); lastHoverTile = null; return;
+                    }
+                    if (lastHoverTile && lastHoverTile.x === tx && lastHoverTile.y === ty) return;
+                    lastHoverTile = { x: tx, y: ty };
+                    hoverGfx.clear();
+                    hoverGfx.beginFill(0xffffff, 0.15);
+                    hoverGfx.drawRect(tx * tileSize, ty * tileSize, tileSize - tileGap, tileSize - tileGap);
+                    hoverGfx.endFill();
+                    const tm = mapTiles[ty][tx];
+                    const countryLabel = tm.country ? ` | ${tm.country}` : '';
+                    drawUI(`Tile ${tx},${ty} | ${tm.type}${countryLabel} | owner: ${tm.owner}`);
+                });
+
+                mapContainer.on('pointerout', () => { hoverGfx.clear(); lastHoverTile = null; });
+
+                mapContainer.on('pointerdown', (e) => {
+                    pDownPos = { x: e.clientX, y: e.clientY };
+                });
+
+                mapContainer.on('pointerup', async (e) => {
+                    if (!pDownPos) return;
+                    const dx = e.clientX - pDownPos.x;
+                    const dy = e.clientY - pDownPos.y;
+                    pDownPos = null;
+                    if (Math.sqrt(dx * dx + dy * dy) > 5) return; // drag — ignore
+
+                    if (gameState.win || gameState.eliminated) {
+                        drawUI('Game over. Press Start/Reset to play again.');
+                        return;
+                    }
+                    const local = getLocalPos(e);
+                    const x = Math.floor(local.x / tileSize);
+                    const y = Math.floor(local.y / tileSize);
+                    if (x < 0 || y < 0 || x >= mapWidth || y >= mapHeight) return;
+                    const tileModel = mapTiles[y][x];
+
+                    if (pretendStart) {
+                        if (tileModel.type === 'water') { drawUI('Pick a land tile for your start position.'); return; }
+                        if (tileModel.owner !== 'neutral') { drawUI('Pick a neutral tile for your start position.'); return; }
+                        startPosition = { x, y };
+                        document.getElementById('startTile').textContent = `${x},${y}`;
+                        drawUI(`Start position selected at ${x},${y}. Click Start Match.`);
+                        redrawSelectionLayer();
+                        return;
+                    }
+
+                    if (e.shiftKey) {
+                        if (tileModel.owner !== 'player1') { drawUI('You must own this tile to build.'); return; }
+                        if (tileModel.building) { drawUI('Tile already has a building.'); return; }
+                        const buildRes = await fetch('/building', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ x, y, player: 'player1', type: 'city' })
+                        });
+                        const buildData = await buildRes.json();
+                        if (!buildRes.ok) { drawUI(`Build failed: ${buildData.error || 'unknown'}`); }
+                        else { drawUI('City built!'); }
+                        await renderCurrentMap();
+                        return;
+                    }
+
+                    if (!selected) {
+                        if (tileModel.owner !== 'player1') { drawUI('Select your own tile first.'); return; }
+                        selected = { x, y, owner: tileModel.owner };
+                        redrawSelectionLayer();
+                        drawUI(`Selected ${x},${y}. Click any enemy/neutral land tile to send troops.`);
+                        return;
+                    }
+
+                    if (selected.x === x && selected.y === y) {
+                        selected = null;
+                        redrawSelectionLayer();
+                        drawUI('Selection cleared.');
+                        return;
+                    }
+
+                    if (tileModel.type === 'water') { drawUI('Cannot attack water tiles.'); return; }
+
+                    const attackRes = await fetch('/api/action/attack', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ fromX: selected.x, fromY: selected.y, toX: x, toY: y, player: 'player1' })
+                    });
+                    const result = await attackRes.json();
+                    if (!attackRes.ok) { drawUI(`Attack failed: ${result.error || 'unknown'}`); }
+                    else { drawUI(result.message); }
+                    selected = null;
+                    await renderCurrentMap();
+                });
+
+                mapInitialized = true;
+                if (!hasInitializedView) {
+                    fitMapInView();
+                    hasInitializedView = true;
+                } else if (zoom < getMinZoom()) {
+                    fitMapInView();
+                }
+            }
+
+            // drawMap: first call initialises layers; subsequent calls only update what changed
+            function drawMap(mapRows) {
+                if (!mapInitialized) { initMap(mapRows); return; }
+                let anyChange = false;
+                for (let y = 0; y < mapHeight; y++) {
+                    for (let x = 0; x < mapWidth; x++) {
+                        const n = mapRows[y][x];
+                        const o = mapTiles[y][x];
+                        if (n.owner !== o.owner || n.building !== o.building) {
+                            mapTiles[y][x] = n;
+                            anyChange = true;
+                        }
+                    }
+                }
+                if (anyChange) {
+                    redrawDynamicLayers();
+                    redrawSelectionLayer();
+                }
             }
 
             async function renderCurrentMap() {
                 const data = await refreshMap();
-                drawMap({ map: data.map, stats: data.stats });
-                updateStats({ player: data.player, stats: data.stats });
+                drawMap(data.map);
+                updateStats({ player: data.player, stats: data.stats, scoreboard: data.scoreboard });
                 return data;
             }
 
             setInterval(async () => {
                 if (!autoRefresh) return;
-                const data = await refreshMap();
-                drawMap({ map: data.map });
-                updateStats({ player: data.player, stats: data.stats });
+                const data = await refreshMapForInterval();
+                drawMap(data.map);
+                updateStats({ player: data.player, stats: data.stats, scoreboard: data.scoreboard });
                 if (gameState.win || gameState.eliminated) {
                     showVictoryModal(gameState.player, gameState.stats, gameState.scoreboard);
                     autoRefresh = false;
                 }
-            }, 1200);
+            }, 2500);
 
             await renderCurrentMap();
         }
