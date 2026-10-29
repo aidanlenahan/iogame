@@ -205,7 +205,7 @@
       <button id="buildCityBtn">&#x1F3D9; City &mdash; 125g (+25k cap)</button>
       <button id="buildPortBtn">&#x2693; Port &mdash; 200g (+15 gold/tick)</button>
     </div>
-    <div id="ui"><h1>OpenFront Alpha</h1><p>Left-click your tile, then click enemy land to send troops. Right-click your tile to build.</p><p id="stats">Connecting...</p></div>
+    <div id="ui"><h1>OpenFront Alpha</h1><p id="uiMsg">Left-click your tile, then click enemy land to send troops. Right-click your tile to build.</p><p id="stats">Connecting...</p></div>
     <script>
         const app = new PIXI.Application();
         
@@ -359,8 +359,8 @@
             let localMapData = null; // client-side copy maintained by refreshMapForInterval
 
             function drawUI(text) {
-                const ui = document.getElementById('ui');
-                ui.innerHTML = `<h1>OpenFront Alpha</h1><p>${text}</p><p id="msg"></p>`;
+                // Only replace the message line; rewriting all of #ui would delete #stats
+                document.getElementById('uiMsg').innerHTML = text;
             }
 
             function showVictoryModal(player, stats, scoreboard) {
