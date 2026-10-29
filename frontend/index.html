@@ -667,7 +667,7 @@
                     if (e.shiftKey) {
                         if (tileModel.owner !== 'player1') { drawUI('You must own this tile to build.'); return; }
                         if (tileModel.building) { drawUI('Tile already has a building.'); return; }
-                        const buildRes = await fetch('/building', {
+                        const buildRes = await fetch('/api/building', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ x, y, player: 'player1', type: 'city' })
