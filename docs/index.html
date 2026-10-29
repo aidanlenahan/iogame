@@ -1,0 +1,900 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>OpenFront Remake - Static Demo</title>
+    <script src="https://cdn.jsdelivr.net/npm/pixi.js@8.6.6/dist/pixi.min.js"></script>
+    <!-- Static demo: engine.js runs the game server in the browser and answers /api/* calls -->
+    <script src="engine.js"></script>
+    <style>
+        body { margin: 0; background: #111; overflow: hidden; }
+        canvas { display: block; }
+        #ui { position: absolute; top: 10px; left: 10px; color: white; font-family: sans-serif; pointer-events: none; }
+        #victoryModal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+        #victoryModal.show {
+            display: flex;
+        }
+        #modalContent {
+            background: #1a1a1a;
+            border: 3px solid #4CAF50;
+            border-radius: 12px;
+            padding: 40px;
+            text-align: center;
+            color: white;
+            font-family: sans-serif;
+            min-width: 400px;
+        }
+        #modalContent h2 {
+            font-size: 2.5em;
+            margin: 0 0 20px 0;
+            color: #4CAF50;
+        }
+        #modalContent p {
+            font-size: 1.2em;
+            margin: 10px 0;
+        }
+        #modalContent button {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            font-size: 1.1em;
+            border-radius: 6px;
+            cursor: pointer;
+            margin-top: 20px;
+        }
+        #modalContent button:hover {
+            background: #45a049;
+        }
+        #buildMenu {
+            display: none;
+            position: fixed;
+            z-index: 200;
+            background: #1c1c2e;
+            border: 1px solid #444;
+            border-radius: 6px;
+            padding: 4px 0;
+            min-width: 200px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+            font-family: sans-serif;
+        }
+        #buildMenu .menu-title {
+            padding: 6px 12px;
+            color: #aaa;
+            font-size: 11px;
+            border-bottom: 1px solid #333;
+        }
+        #buildMenu button {
+            display: block;
+            width: 100%;
+            text-align: left;
+            background: none;
+            border: none;
+            color: #fff;
+            padding: 8px 12px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        #buildMenu button:hover:not(:disabled) { background: rgba(255,255,255,0.08); }
+        #buildMenu button:disabled { color: #555; cursor: default; }
+
+        /* ── Landing screen ─────────────────────────────────────── */
+        #landing {
+            position: fixed; inset: 0; z-index: 500;
+            background: linear-gradient(135deg, #060912 0%, #0d1528 50%, #080e1c 100%);
+            display: flex; align-items: center; justify-content: center;
+            font-family: sans-serif;
+            transition: opacity 0.4s ease;
+        }
+        #landing::before {
+            content: '';
+            position: absolute; inset: 0;
+            background-image:
+                linear-gradient(rgba(58,134,255,0.05) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(58,134,255,0.05) 1px, transparent 1px);
+            background-size: 48px 48px;
+            pointer-events: none;
+        }
+        #landingContent { position: relative; text-align: center; max-width: 620px; padding: 48px 32px; }
+        #gameVersion { color: #3a5a7a; font-size: 0.75em; letter-spacing: 0.25em; text-transform: uppercase; margin-bottom: 12px; }
+        #gameTitle {
+            font-size: 5.5em; letter-spacing: 0.18em; margin: 0 0 6px;
+            color: #e8c86a;
+            text-shadow: 0 0 40px rgba(232,180,50,0.55), 0 0 90px rgba(232,180,50,0.2);
+            font-weight: 900; line-height: 1;
+        }
+        #gameDivider {
+            width: 80px; height: 2px; margin: 18px auto 22px;
+            background: linear-gradient(90deg, transparent, #e8c86a, transparent);
+        }
+        #gameTagline { font-size: 1.15em; color: #a8c4d8; margin-bottom: 36px; line-height: 1.7; }
+        .gfeat { display: inline-block; margin: 6px 20px; color: #6a90aa; font-size: 0.88em; vertical-align: top; }
+        .gfeat .fi { display: block; font-size: 1.6em; margin-bottom: 4px; }
+        #featureRow { margin-bottom: 44px; }
+        #playBtn {
+            background: linear-gradient(135deg, #a06800 0%, #d4920a 50%, #a06800 100%);
+            color: #fef8e7; border: none; padding: 16px 76px;
+            font-size: 1.2em; font-weight: 900; letter-spacing: 0.22em;
+            border-radius: 3px; cursor: pointer; text-transform: uppercase;
+            box-shadow: 0 0 30px rgba(212,146,10,0.45), 0 4px 18px rgba(0,0,0,0.7);
+            transition: transform 0.12s, box-shadow 0.2s;
+        }
+        #playBtn:hover { transform: scale(1.05); box-shadow: 0 0 55px rgba(212,146,10,0.65), 0 6px 22px rgba(0,0,0,0.8); }
+        #winCondition { margin-top: 22px; color: #3a5a6a; font-size: 0.78em; letter-spacing: 0.12em; text-transform: uppercase; }
+        #demoNote { margin-top: 28px; color: #4a6a80; font-size: 0.8em; line-height: 1.6; }
+        #demoNote a { color: #7aaccc; }
+        #playBtn:disabled { opacity: 0.5; cursor: wait; transform: none; }
+
+        /* ── Unfinished-game disclaimer ─────────────────────────── */
+        #disclaimer {
+            display: none;
+            position: fixed; inset: 0; z-index: 600;
+            background: rgba(4, 7, 15, 0.82);
+            align-items: center; justify-content: center;
+            font-family: sans-serif;
+        }
+        #disclaimer.show { display: flex; }
+        #disclaimerBox {
+            background: #0d1528; border: 1px solid #e8c86a; border-radius: 8px;
+            max-width: 460px; margin: 16px; padding: 28px 30px; color: #a8c4d8;
+            line-height: 1.6; box-shadow: 0 8px 40px rgba(0,0,0,0.7);
+        }
+        #disclaimerBox h2 { color: #e8c86a; margin: 0 0 12px; letter-spacing: 0.12em; font-size: 1.2em; text-transform: uppercase; }
+        #disclaimerBox p { margin: 0 0 12px; font-size: 0.92em; }
+        #disclaimerOk {
+            margin-top: 8px; background: linear-gradient(135deg, #a06800, #d4920a);
+            color: #fef8e7; border: none; padding: 10px 28px; border-radius: 3px;
+            font-weight: 700; letter-spacing: 0.15em; cursor: pointer; text-transform: uppercase;
+        }
+
+        /* ── Selection / countdown overlay ─────────────────────── */
+        #selectionOverlay {
+            display: none;
+            position: fixed; top: 0; left: 0; right: 0; z-index: 300;
+            flex-direction: column; align-items: center;
+            background: linear-gradient(to bottom, rgba(6,9,20,0.90) 0%, transparent 100%);
+            padding: 22px 20px 70px;
+            pointer-events: none; /* clicks pass through to map */
+        }
+        #selectionBanner { text-align: center; font-family: sans-serif; }
+        #selectionTitle { color: #e8c86a; font-size: 1.05em; letter-spacing: 0.18em; text-transform: uppercase; margin-bottom: 6px; }
+        #countdownNum {
+            font-size: 4.5em; font-weight: 900; color: #fff; line-height: 1;
+            text-shadow: 0 0 24px rgba(58,134,255,0.9);
+        }
+        #selectionHint { color: #7aaccc; font-size: 0.88em; margin-top: 8px; }
+        #confirmSpawnBtn {
+            pointer-events: auto;
+            margin-top: 14px;
+            background: rgba(58,134,255,0.18);
+            border: 1px solid rgba(58,134,255,0.5);
+            color: #a8d0ff; padding: 7px 22px;
+            border-radius: 4px; cursor: pointer; font-size: 0.85em;
+            letter-spacing: 0.08em;
+        }
+        #confirmSpawnBtn:hover { background: rgba(58,134,255,0.32); }
+    </style>
+</head>
+<body>
+    <div id="landing">
+      <div id="landingContent">
+        <p id="gameVersion">Alpha &mdash; v0.1 &middot; Static Demo</p>
+        <h1 id="gameTitle">OPENFRONT</h1>
+        <div id="gameDivider"></div>
+        <p id="gameTagline">Stake your claim on the world map. Expand your borders,<br>build an empire, and outlast every rival.</p>
+        <div id="featureRow">
+          <span class="gfeat"><span class="fi">&#x1F5FA;</span>Claim territory</span>
+          <span class="gfeat"><span class="fi">&#x2694;&#xFE0F;</span>Attack enemies</span>
+          <span class="gfeat"><span class="fi">&#x1F3D9;</span>Build cities &amp; ports</span>
+        </div>
+        <button id="playBtn" disabled>LOADING&hellip;</button>
+        <p id="winCondition">Control 80% of the map to win</p>
+        <p id="demoNote">This demo runs entirely in your browser &mdash; the Node/Redis game server is simulated locally,<br>so progress resets on reload. Source: <a href="https://github.com/aidanlenahan/iogame">aidanlenahan/iogame</a></p>
+      </div>
+    </div>
+
+    <div id="disclaimer">
+      <div id="disclaimerBox">
+        <h2>&#x26A0;&#xFE0F; Heads up</h2>
+        <p>This game is <strong>very unfinished</strong>. It's an archived early-alpha attempt at an OpenFront remake, so expect bugs, missing features and rough balance.</p>
+        <p>There is one bot opponent and you capture land one tile at a time, so the 80% win condition isn't realistically reachable yet.</p>
+        <button id="disclaimerOk">Got it &mdash; let me play</button>
+      </div>
+    </div>
+
+    <div id="selectionOverlay">
+      <div id="selectionBanner">
+        <div id="selectionTitle">Choose Your Starting Territory</div>
+        <div id="countdownNum">10</div>
+        <div id="selectionHint">Click any land tile to place your flag</div>
+        <button id="confirmSpawnBtn">Start Now &rarr;</button>
+      </div>
+    </div>
+
+    <div id="victoryModal">
+        <div id="modalContent">
+            <h2 id="modalTitle">VICTORY!</h2>
+            <p id="modalStats"></p>
+            <button id="playAgainBtn">Play Again</button>
+        </div>
+    </div>
+    <div id="controls" style="position:absolute;top:10px;right:10px;z-index:100;background:rgba(0,0,0,0.45);padding:8px;border-radius:8px;display:none;">
+      <button id="startBtn">Start Match (Choose Start Tile)</button>
+      <button id="toggleAuto">Auto-Refresh: ON</button><br/>
+      <div style="color:#fff;margin-top:4px;font-size:12px;">Start tile: <span id="startTile">0,0</span> (click neutral tile to set)</div>
+            <div style="color:#fff;margin-top:2px;font-size:12px;">Map: <span id="mapDims">-</span> | Zoom: <span id="zoomValue">1.00x</span></div>
+      <label style="font-size:12px;color:#fff;">Troop Ratio: <span id="ratioValue">80%</span></label><br/>
+      <input id="ratioSlider" type="range" min="10" max="90" value="80" style="width:150px;" />
+    </div>
+    <div id="buildMenu">
+      <div class="menu-title" id="buildMenuTitle"></div>
+      <button id="buildCityBtn">&#x1F3D9; City &mdash; 125g (+25k cap)</button>
+      <button id="buildPortBtn">&#x2693; Port &mdash; 200g (+15 gold/tick)</button>
+    </div>
+    <div id="ui"><h1>OpenFront Alpha</h1><p id="uiMsg">Left-click your tile, then click enemy land to send troops. Right-click your tile to build.</p><p id="stats">Connecting...</p></div>
+    <script>
+        const app = new PIXI.Application();
+        
+        async function init() {
+            await app.init({ 
+                width: window.innerWidth, 
+                height: window.innerHeight, 
+                backgroundColor: 0x1099bb,
+                antialias: true,
+                resolution: window.devicePixelRatio || 1,
+                autoDensity: true,
+                resizeTo: window 
+            });
+            document.body.appendChild(app.canvas);
+            app.canvas.style.display = 'none'; // hidden until Play is clicked
+
+            const tileSize = 0.6;
+            const tileGap = 0;
+            const outlineWidth = Math.max(0.4, tileSize * 0.5);
+            const maxZoom = 24;
+            const mapContainer = new PIXI.Container();
+            app.stage.addChild(mapContainer);
+
+            let camera = { x: 0, y: 0, speed: 8 };
+            let zoom = 1;
+            let mapPixelWidth = 1;
+            let mapPixelHeight = 1;
+            let hasInitializedView = false;
+            mapContainer.scale.set(zoom);
+
+            function getMinZoom() {
+                return Math.min(window.innerWidth / mapPixelWidth, window.innerHeight / mapPixelHeight);
+            }
+
+            function clampZoom(nextZoom) {
+                const minZoom = getMinZoom();
+                return Math.min(maxZoom, Math.max(minZoom, nextZoom));
+            }
+
+            function clampCamera() {
+                const scaledW = mapPixelWidth * zoom;
+                const scaledH = mapPixelHeight * zoom;
+                if (scaledW >= window.innerWidth) {
+                    camera.x = Math.min(0, Math.max(window.innerWidth - scaledW, camera.x));
+                } else {
+                    camera.x = (window.innerWidth - scaledW) / 2;
+                }
+                if (scaledH >= window.innerHeight) {
+                    camera.y = Math.min(0, Math.max(window.innerHeight - scaledH, camera.y));
+                } else {
+                    camera.y = (window.innerHeight - scaledH) / 2;
+                }
+            }
+
+            function fitMapInView() {
+                zoom = clampZoom(zoom);
+                mapContainer.scale.set(zoom);
+                camera.x = (window.innerWidth - mapPixelWidth * zoom) / 2;
+                camera.y = (window.innerHeight - mapPixelHeight * zoom) / 2;
+                clampCamera();
+                mapContainer.x = camera.x;
+                mapContainer.y = camera.y;
+                const zoomLabel = document.getElementById('zoomValue');
+                if (zoomLabel) zoomLabel.textContent = `${zoom.toFixed(2)}x`;
+            }
+
+            window.addEventListener('resize', () => {
+                if (!mapPixelWidth || !mapPixelHeight) return;
+                fitMapInView();
+            });
+
+            window.addEventListener('wheel', (e) => {
+                e.preventDefault();
+                const rect = app.canvas.getBoundingClientRect();
+                const cursorX = e.clientX - rect.left;
+                const cursorY = e.clientY - rect.top;
+
+                const oldZoom = zoom;
+                const worldX = (cursorX - camera.x) / oldZoom;
+                const worldY = (cursorY - camera.y) / oldZoom;
+
+                zoom = clampZoom(zoom - e.deltaY * 0.0016);
+                camera.x = cursorX - worldX * zoom;
+                camera.y = cursorY - worldY * zoom;
+                clampCamera();
+                mapContainer.scale.set(zoom);
+                mapContainer.x = camera.x;
+                mapContainer.y = camera.y;
+                const zoomLabel = document.getElementById('zoomValue');
+                if (zoomLabel) zoomLabel.textContent = `${zoom.toFixed(2)}x`;
+            }, { passive: false });
+
+            app.view.addEventListener('pointerdown', (e) => {
+                if (e.button !== 0) return;
+                dragging = true;
+                dragStart = { x: e.clientX, y: e.clientY, camX: camera.x, camY: camera.y };
+            });
+            app.view.addEventListener('pointermove', (e) => {
+                if (!dragging || !dragStart) return;
+                camera.x = dragStart.camX + (e.clientX - dragStart.x);
+                camera.y = dragStart.camY + (e.clientY - dragStart.y);
+                clampCamera();
+            });
+            app.view.addEventListener('pointerup', () => { dragging = false; });
+            app.view.addEventListener('pointerleave', () => { dragging = false; });
+            const keys = {};
+
+            window.addEventListener("keydown", e => {
+                keys[e.code] = true;
+                if (e.key === 'Escape') document.getElementById('buildMenu').style.display = 'none';
+            });
+            window.addEventListener("keyup", e => keys[e.code] = false);
+
+            app.ticker.add(() => {
+                if (keys['KeyW'] || keys['ArrowUp']) camera.y += camera.speed;
+                if (keys['KeyS'] || keys['ArrowDown']) camera.y -= camera.speed;
+                if (keys['KeyA'] || keys['ArrowLeft']) camera.x += camera.speed;
+                if (keys['KeyD'] || keys['ArrowRight']) camera.x -= camera.speed;
+                clampCamera();
+                mapContainer.x = camera.x;
+                mapContainer.y = camera.y;
+            });
+
+            // All land renders as neutral "wilderness"; ownership layer paints player colors
+            const WATER_COLOR = 0x1a66aa;   // ocean blue — never owned
+            const LAND_COLOR  = 0x4a6a30;   // wilderness green — neutral unowned land
+
+            let mapTiles = [];  // now stores tile-data objects, not PIXI.Graphics
+            let selected = null;
+            let startPosition = { x: 22, y: 78 };  // default spawn (changed by tile click)
+            let pretendStart = true;
+            let previewTile = null;  // tile temporarily shown as owned during selection countdown
+            let gameState = { win: false, player: { eliminated: false } };
+            let dragging = false;
+            let dragStart = null;
+            let gamePhase = 'home';   // 'home' | 'selecting' | 'playing'
+            let countdownValue = 10;
+            let countdownIntervalId = null;
+
+            // ── Flat-layer rendering state (persists across refreshes) ────────
+            let mapInitialized = false;
+            let mapWidth = 0;
+            let mapHeight = 0;
+            let terrainGfx = null;   // drawn once; never changes
+            let ownerGfx = null;     // redrawn when ownership changes
+            let buildingGfx = null;  // redrawn when buildings change
+            let hoverGfx = null;     // single-tile hover highlight
+            let selectionGfx = null; // selection + start-position outlines
+            let lastHoverTile = null;
+            let clientTick = 0;      // server tick we last synced to
+            let localMapData = null; // client-side copy maintained by refreshMapForInterval
+
+            function drawUI(text) {
+                // Only replace the message line; rewriting all of #ui would delete #stats
+                document.getElementById('uiMsg').innerHTML = text;
+            }
+
+            function showVictoryModal(player, stats, scoreboard) {
+                const modal = document.getElementById('victoryModal');
+                const title = document.getElementById('modalTitle');
+                const statsText = document.getElementById('modalStats');
+                if (player.eliminated) {
+                    title.textContent = 'DEFEATED!';
+                    title.style.color = '#ff4d4f';
+                    statsText.innerHTML = `<p>You have been eliminated.</p><p>Final Control: ${stats.controlPct}%</p>`;
+                } else {
+                    title.textContent = 'VICTORY!';
+                    title.style.color = '#4CAF50';
+                    statsText.innerHTML = `<p>You control ${stats.controlPct}% of the map!</p><p>Population: ${player.pop.toLocaleString()}</p>`;
+                }
+                if (scoreboard && scoreboard.length > 0) {
+                    let tbl = '<table style="width:100%;margin-top:20px;border-collapse:collapse;font-size:0.88em;">';
+                    tbl += '<thead><tr style="border-bottom:1px solid #555;"><th style="text-align:left;padding:4px 8px;">#</th><th style="text-align:left;padding:4px 8px;">Player</th><th style="text-align:right;padding:4px 8px;">Land%</th><th style="text-align:right;padding:4px 8px;">Troops</th><th style="text-align:right;padding:4px 8px;">Status</th></tr></thead><tbody>';
+                    scoreboard.forEach((p, i) => {
+                        const isMe = p.id === 'player1';
+                        const rowStyle = isMe ? 'background:rgba(255,255,255,0.07);font-weight:bold;' : '';
+                        const status = p.eliminated
+                            ? '<span style="color:#ff4d4f;">Elim.</span>'
+                            : '<span style="color:#4CAF50;">Active</span>';
+                        const name = isMe ? 'You' : p.id;
+                        tbl += `<tr style="${rowStyle}"><td style="padding:4px 8px;">${i+1}</td><td style="padding:4px 8px;">${name}</td><td style="text-align:right;padding:4px 8px;">${p.controlPct}%</td><td style="text-align:right;padding:4px 8px;">${p.troops.toLocaleString()}</td><td style="text-align:right;padding:4px 8px;">${status}</td></tr>`;
+                    });
+                    tbl += '</tbody></table>';
+                    statsText.innerHTML += tbl;
+                }
+                modal.classList.add('show');
+            }
+
+            function hideVictoryModal() {
+                const modal = document.getElementById('victoryModal');
+                modal.classList.remove('show');
+            }
+
+            function updateStats(data) {
+                if (!data || !data.player || !data.stats) return;
+                const p = data.player;
+                const s = data.stats;
+                gameState.player = p;
+                gameState.stats = s;
+                gameState.scoreboard = data.scoreboard || [];
+                gameState.win = s.controlPct >= 80;
+                gameState.eliminated = p.eliminated;
+                document.getElementById('stats').innerHTML =
+                    `Pop: ${p.pop} (T:${p.troops} W:${p.workers}) | Gold: ${p.gold} | Cap: ${p.cap} | Control: ${s.controlPct}% | Orders: ${s.pendingAttacks || 0}`;
+                document.getElementById('ratioValue').textContent = `${p.troopRatio}%`;
+                document.getElementById('ratioSlider').value = String(p.troopRatio);
+                if (p.eliminated) {
+                    document.getElementById('stats').innerHTML += ' | ❌ ELIMINATED';
+                } else if (s.controlPct >= 80) {
+                    document.getElementById('stats').innerHTML += ' | ✅ VICTORY!';
+                }
+            }
+
+            const startBtn = document.getElementById('startBtn');
+            const toggleAutoBtn = document.getElementById('toggleAuto');
+            const playAgainBtn = document.getElementById('playAgainBtn');
+            let autoRefresh = false; // enabled only once match begins
+
+            // ── Game phase transitions ─────────────────────────────────────
+            function returnToSelectScreen() {
+                clearInterval(countdownIntervalId);
+                hideVictoryModal();
+                pretendStart = true;
+                selected = null;
+                previewTile = null;
+                autoRefresh = false;
+                gamePhase = 'selecting';
+                document.getElementById('selectionOverlay').style.display = 'flex';
+                countdownValue = 10;
+                document.getElementById('countdownNum').textContent = countdownValue;
+                document.getElementById('selectionHint').textContent = 'Click any land tile to place your flag';
+                redrawSelectionLayer();
+                countdownIntervalId = setInterval(() => {
+                    countdownValue--;
+                    document.getElementById('countdownNum').textContent = countdownValue;
+                    if (countdownValue <= 0) {
+                        clearInterval(countdownIntervalId);
+                        launchMatch();
+                    }
+                }, 1000);
+            }
+
+            async function launchMatch() {
+                gamePhase = 'playing';
+                document.getElementById('selectionOverlay').style.display = 'none';
+                document.getElementById('controls').style.display = 'block';
+                pretendStart = false;
+                drawUI('Starting match\u2026');
+                try {
+                    const res = await fetch('/api/start', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ startX: startPosition.x, startY: startPosition.y })
+                    });
+                    if (!res.ok) throw new Error(await res.text());
+                    await renderCurrentMap();
+                    autoRefresh = true;
+                    drawUI('Match started! Select your tile, then click enemy land to attack.');
+                } catch (err) {
+                    drawUI(`Start failed: ${err.message}`);
+                }
+            }
+
+            startBtn.addEventListener('click', () => returnToSelectScreen());
+            playAgainBtn.addEventListener('click', () => returnToSelectScreen());
+
+            const ratioSlider = document.getElementById('ratioSlider');
+            ratioSlider.addEventListener('input', async () => {
+                const ratio = Number(ratioSlider.value);
+                document.getElementById('ratioValue').textContent = `${ratio}%`;
+                await fetch('/api/player/1/ratio', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ratio })
+                });
+                await renderCurrentMap();
+            });
+
+            toggleAutoBtn.addEventListener('click', () => {
+                autoRefresh = !autoRefresh;
+                toggleAutoBtn.textContent = `Auto-Refresh: ${autoRefresh ? 'ON' : 'OFF'}`;
+            });
+
+            async function refreshMap() {
+                const res = await fetch('/api/map');
+                const data = await res.json();
+                localMapData = data.map;
+                clientTick = data.serverTick || 0;
+                return data;
+            }
+
+            async function refreshMapForInterval() {
+                if (!localMapData || clientTick === 0) return refreshMap();
+                try {
+                    const res = await fetch(`/api/map/diff?since=${clientTick}`);
+                    const diff = await res.json();
+                    if (diff.needsFullRefresh) return refreshMap();
+                    for (const { x, y, tile } of (diff.changes || [])) {
+                        if (localMapData[y] && localMapData[y][x]) localMapData[y][x] = tile;
+                    }
+                    clientTick = diff.serverTick || clientTick;
+                    return { map: localMapData, player: diff.player, stats: diff.stats,
+                             win: diff.win, scoreboard: diff.scoreboard };
+                } catch (_) { return refreshMap(); }
+            }
+
+            // ── Rendering helpers ──────────────────────────────────
+            function getLocalPos(e) {
+                return e.data ? e.data.getLocalPosition(mapContainer) : e.getLocalPosition(mapContainer);
+            }
+
+            // Deterministic per-owner color palette (index 0 = player1)
+            const OWNER_COLORS = {
+                player1: 0x3a86ff,  // player blue
+            };
+            function ownerColor(owner) {
+                if (owner === 'player1') return OWNER_COLORS.player1;
+                // Stable warm color per bot/AI id
+                let h = 0;
+                for (let i = 0; i < owner.length; i++) h = (h * 31 + owner.charCodeAt(i)) >>> 0;
+                const palette = [0xe0632a, 0xd94f9a, 0xf0c040, 0x9b59b6, 0x1abc9c, 0xe74c3c];
+                return palette[h % palette.length];
+            }
+
+            function redrawDynamicLayers() {
+                ownerGfx.clear();
+                buildingGfx.clear();
+                for (let y = 0; y < mapHeight; y++) {
+                    for (let x = 0; x < mapWidth; x++) {
+                        const t = mapTiles[y][x];
+                        if (t.owner !== 'neutral') {
+                            ownerGfx.beginFill(ownerColor(t.owner), 1.0);
+                            ownerGfx.drawRect(x * tileSize, y * tileSize, tileSize - tileGap, tileSize - tileGap);
+                            ownerGfx.endFill();
+                        }
+                        if (t.building === 'city') {
+                            buildingGfx.beginFill(0x333333);
+                            buildingGfx.drawRect(x * tileSize + tileSize / 4, y * tileSize + tileSize / 4, tileSize / 2, tileSize / 2);
+                            buildingGfx.endFill();
+                        }
+                        if (t.building === 'port') {
+                            buildingGfx.beginFill(0x00bfff);
+                            buildingGfx.drawCircle(x * tileSize + tileSize / 2, y * tileSize + tileSize / 2, tileSize * 0.32);
+                            buildingGfx.endFill();
+                        }
+                    }
+                }
+            }
+
+            function redrawSelectionLayer() {
+                selectionGfx.clear();
+                if (pretendStart) {
+                    selectionGfx.lineStyle(outlineWidth, 0xffff00);
+                    selectionGfx.drawRect(startPosition.x * tileSize, startPosition.y * tileSize, tileSize - tileGap, tileSize - tileGap);
+                }
+                if (selected) {
+                    selectionGfx.lineStyle(outlineWidth, 0xffffff);
+                    selectionGfx.drawRect(selected.x * tileSize, selected.y * tileSize, tileSize - tileGap, tileSize - tileGap);
+                }
+            }
+
+            function initMap(mapRows) {
+                mapContainer.removeChildren();
+                mapHeight = mapRows.length;
+                mapWidth  = mapRows[0] ? mapRows[0].length : 0;
+                mapPixelHeight = mapHeight * tileSize;
+                mapPixelWidth  = mapWidth  * tileSize;
+                const mapDimsLabel = document.getElementById('mapDims');
+                if (mapDimsLabel) mapDimsLabel.textContent = `${mapWidth}x${mapHeight}`;
+
+                terrainGfx  = new PIXI.Graphics();
+                ownerGfx    = new PIXI.Graphics();
+                buildingGfx = new PIXI.Graphics();
+                hoverGfx    = new PIXI.Graphics();
+                selectionGfx= new PIXI.Graphics();
+                mapContainer.addChild(terrainGfx, ownerGfx, buildingGfx, hoverGfx, selectionGfx);
+
+                // Store tile data & draw terrain layer once (never redrawn)
+                mapTiles = [];
+                for (let y = 0; y < mapHeight; y++) {
+                    mapTiles[y] = [];
+                    for (let x = 0; x < mapWidth; x++) {
+                        mapTiles[y][x] = mapRows[y][x];
+                        const baseColor = mapRows[y][x].type === 'water' ? WATER_COLOR : LAND_COLOR;
+                        terrainGfx.beginFill(baseColor);
+                        terrainGfx.drawRect(x * tileSize, y * tileSize, tileSize - tileGap, tileSize - tileGap);
+                        terrainGfx.endFill();
+                    }
+                }
+                redrawDynamicLayers();
+                redrawSelectionLayer();
+
+                // Container-level pointer events (replaces 192,200 individual tile handlers)
+                mapContainer.interactive = true;
+                mapContainer.hitArea = new PIXI.Rectangle(0, 0, mapPixelWidth, mapPixelHeight);
+                let pDownPos = null;
+
+                mapContainer.on('pointermove', (e) => {
+                    const local = getLocalPos(e);
+                    const tx = Math.floor(local.x / tileSize);
+                    const ty = Math.floor(local.y / tileSize);
+                    if (tx < 0 || ty < 0 || tx >= mapWidth || ty >= mapHeight) {
+                        hoverGfx.clear(); lastHoverTile = null; return;
+                    }
+                    if (lastHoverTile && lastHoverTile.x === tx && lastHoverTile.y === ty) return;
+                    lastHoverTile = { x: tx, y: ty };
+                    hoverGfx.clear();
+                    hoverGfx.beginFill(0xffffff, 0.15);
+                    hoverGfx.drawRect(tx * tileSize, ty * tileSize, tileSize - tileGap, tileSize - tileGap);
+                    hoverGfx.endFill();
+                    const tm = mapTiles[ty][tx];
+                    const countryLabel = tm.country ? ` | ${tm.country}` : '';
+                    drawUI(`Tile ${tx},${ty} | ${tm.type}${countryLabel} | owner: ${tm.owner}`);
+                });
+
+                mapContainer.on('pointerout', () => { hoverGfx.clear(); lastHoverTile = null; });
+
+                mapContainer.on('pointerdown', (e) => {
+                    if (e.button !== 0) return;
+                    pDownPos = { x: e.clientX, y: e.clientY };
+                });
+
+                mapContainer.on('pointerup', async (e) => {
+                    if (!pDownPos) return;
+                    const dx = e.clientX - pDownPos.x;
+                    const dy = e.clientY - pDownPos.y;
+                    pDownPos = null;
+                    if (Math.sqrt(dx * dx + dy * dy) > 5) return; // drag — ignore
+
+                    if (gameState.win || gameState.eliminated) {
+                        drawUI('Game over. Press Start/Reset to play again.');
+                        return;
+                    }
+                    const local = getLocalPos(e);
+                    const x = Math.floor(local.x / tileSize);
+                    const y = Math.floor(local.y / tileSize);
+                    if (x < 0 || y < 0 || x >= mapWidth || y >= mapHeight) return;
+                    const tileModel = mapTiles[y][x];
+
+                    if (pretendStart) {
+                        if (tileModel.type === 'water') { drawUI('Pick a land tile for your start position.'); return; }
+                        // Clear previous preview ownership
+                        if (previewTile) {
+                            mapTiles[previewTile.y][previewTile.x] = { ...mapTiles[previewTile.y][previewTile.x], owner: 'neutral' };
+                        }
+                        // Show tile as player1-owned immediately (visual preview)
+                        mapTiles[y][x] = { ...mapTiles[y][x], owner: 'player1' };
+                        previewTile = { x, y };
+                        startPosition = { x, y };
+                        document.getElementById('startTile').textContent = `${x},${y}`;
+                        const hintEl = document.getElementById('selectionHint');
+                        if (hintEl) hintEl.textContent = `\u2713 Spawn locked at ${x},${y} \u2014 starting in ${countdownValue}s`;
+                        drawUI(`Spawn set at ${x},${y}.`);
+                        redrawDynamicLayers();
+                        redrawSelectionLayer();
+                        return;
+                    }
+
+                    if (e.shiftKey) {
+                        if (tileModel.owner !== 'player1') { drawUI('You must own this tile to build.'); return; }
+                        if (tileModel.building) { drawUI('Tile already has a building.'); return; }
+                        const buildRes = await fetch('/api/building', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ x, y, player: 'player1', type: 'city' })
+                        });
+                        const buildData = await buildRes.json();
+                        if (!buildRes.ok) { drawUI(`Build failed: ${buildData.error || 'unknown'}`); }
+                        else { drawUI('City built!'); }
+                        await renderCurrentMap();
+                        return;
+                    }
+
+                    if (!selected) {
+                        if (tileModel.owner !== 'player1') { drawUI('Select your own tile first.'); return; }
+                        selected = { x, y, owner: tileModel.owner };
+                        redrawSelectionLayer();
+                        drawUI(`Selected ${x},${y}. Click any enemy/neutral land tile to send troops.`);
+                        return;
+                    }
+
+                    if (selected.x === x && selected.y === y) {
+                        selected = null;
+                        redrawSelectionLayer();
+                        drawUI('Selection cleared.');
+                        return;
+                    }
+
+                    if (tileModel.type === 'water') { drawUI('Cannot attack water tiles.'); return; }
+
+                    const attackRes = await fetch('/api/action/attack', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ fromX: selected.x, fromY: selected.y, toX: x, toY: y, player: 'player1' })
+                    });
+                    const result = await attackRes.json();
+                    if (!attackRes.ok) { drawUI(`Attack failed: ${result.error || 'unknown'}`); }
+                    else { drawUI(result.message); }
+                    selected = null;
+                    await renderCurrentMap();
+                });
+
+                mapInitialized = true;
+                if (!hasInitializedView) {
+                    fitMapInView();
+                    hasInitializedView = true;
+                } else if (zoom < getMinZoom()) {
+                    fitMapInView();
+                }
+            }
+
+            // drawMap: first call initialises layers; subsequent calls only update what changed
+            function drawMap(mapRows) {
+                if (!mapInitialized) { initMap(mapRows); return; }
+                let anyChange = false;
+                for (let y = 0; y < mapHeight; y++) {
+                    for (let x = 0; x < mapWidth; x++) {
+                        const n = mapRows[y][x];
+                        const o = mapTiles[y][x];
+                        if (n.owner !== o.owner || n.building !== o.building) {
+                            mapTiles[y][x] = n;
+                            anyChange = true;
+                        }
+                    }
+                }
+                if (anyChange) {
+                    redrawDynamicLayers();
+                    redrawSelectionLayer();
+                }
+            }
+
+            async function renderCurrentMap() {
+                const data = await refreshMap();
+                drawMap(data.map);
+                updateStats({ player: data.player, stats: data.stats, scoreboard: data.scoreboard });
+                return data;
+            }
+
+            // ── Right-click build context menu ──────────────────────────────
+            let buildMenuTile = null;
+
+            function isCoastal(tx, ty) {
+                for (const [nx, ny] of [[tx-1,ty],[tx+1,ty],[tx,ty-1],[tx,ty+1]]) {
+                    if (ny >= 0 && ny < mapHeight && nx >= 0 && nx < mapWidth && mapTiles[ny][nx].type === 'water') return true;
+                }
+                return false;
+            }
+
+            app.canvas.addEventListener('contextmenu', (e) => {
+                e.preventDefault();
+                if (!mapInitialized || pretendStart || gameState.win || gameState.eliminated) return;
+                const rect = app.canvas.getBoundingClientRect();
+                const worldX = (e.clientX - rect.left - camera.x) / zoom;
+                const worldY = (e.clientY - rect.top  - camera.y) / zoom;
+                const tx = Math.floor(worldX / tileSize);
+                const ty = Math.floor(worldY / tileSize);
+                if (tx < 0 || ty < 0 || tx >= mapWidth || ty >= mapHeight) return;
+                const tileModel = mapTiles[ty][tx];
+                if (tileModel.owner !== 'player1') return;
+                buildMenuTile = { x: tx, y: ty };
+                const menu    = document.getElementById('buildMenu');
+                const title   = document.getElementById('buildMenuTitle');
+                const cityBtn = document.getElementById('buildCityBtn');
+                const portBtn = document.getElementById('buildPortBtn');
+                title.textContent = `${tx},${ty} | ${tileModel.type}${tileModel.building ? ' (has ' + tileModel.building + ')' : ''}`;
+                cityBtn.disabled  = !!tileModel.building;
+                const coastal     = isCoastal(tx, ty);
+                portBtn.disabled  = !!tileModel.building || !coastal;
+                portBtn.title     = !coastal ? 'Must be adjacent to water' : '';
+                const menuW = 210, menuH = 95;
+                menu.style.left    = `${Math.min(e.clientX, window.innerWidth  - menuW)}px`;
+                menu.style.top     = `${Math.min(e.clientY, window.innerHeight - menuH)}px`;
+                menu.style.display = 'block';
+            });
+
+            document.getElementById('buildCityBtn').addEventListener('click', async () => {
+                document.getElementById('buildMenu').style.display = 'none';
+                if (!buildMenuTile) return;
+                const { x, y } = buildMenuTile;
+                buildMenuTile = null;
+                const res  = await fetch('/api/building', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ x, y, player: 'player1', type: 'city' })
+                });
+                const data = await res.json();
+                drawUI(res.ok ? 'City built! Population cap +25,000.' : `Build failed: ${data.error || 'unknown'}`);
+                if (res.ok) await renderCurrentMap();
+            });
+
+            document.getElementById('buildPortBtn').addEventListener('click', async () => {
+                document.getElementById('buildMenu').style.display = 'none';
+                if (!buildMenuTile) return;
+                const { x, y } = buildMenuTile;
+                buildMenuTile = null;
+                const res  = await fetch('/api/building', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ x, y, player: 'player1', type: 'port' })
+                });
+                const data = await res.json();
+                drawUI(res.ok ? 'Port built! +15 gold per tick.' : `Build failed: ${data.error || 'unknown'}`);
+                if (res.ok) await renderCurrentMap();
+            });
+
+            document.addEventListener('click', (e) => {
+                const menu = document.getElementById('buildMenu');
+                if (!menu.contains(e.target)) menu.style.display = 'none';
+            });
+
+            setInterval(async () => {
+                if (!autoRefresh) return;
+                const data = await refreshMapForInterval();
+                drawMap(data.map);
+                updateStats({ player: data.player, stats: data.stats, scoreboard: data.scoreboard });
+                if (gameState.win || gameState.eliminated) {
+                    showVictoryModal(gameState.player, gameState.stats, gameState.scoreboard);
+                    autoRefresh = false;
+                }
+            }, 2500);
+
+            try {
+                await renderCurrentMap();
+            } catch (err) {
+                document.getElementById('playBtn').textContent = 'FAILED TO LOAD';
+                document.getElementById('demoNote').textContent = `Could not start the demo engine: ${err.message}`;
+                return;
+            }
+            const playBtn = document.getElementById('playBtn');
+            playBtn.disabled = false;
+            playBtn.textContent = 'PLAY NOW';
+
+            // ── Play button (landing screen) → start selection phase ──────
+            document.getElementById('playBtn').addEventListener('click', () => {
+                const landing = document.getElementById('landing');
+                landing.style.opacity = '0';
+                landing.style.pointerEvents = 'none';
+                setTimeout(() => { landing.style.display = 'none'; }, 420);
+                app.canvas.style.display = 'block';
+                document.getElementById('disclaimer').classList.add('show');
+            });
+
+            document.getElementById('disclaimerOk').addEventListener('click', () => {
+                document.getElementById('disclaimer').classList.remove('show');
+                returnToSelectScreen();
+            });
+
+            document.getElementById('confirmSpawnBtn').addEventListener('click', () => {
+                clearInterval(countdownIntervalId);
+                launchMatch();
+            });
+        }
+        init();
+    </script>
+</body>
+</html>
