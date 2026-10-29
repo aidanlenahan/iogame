@@ -30,15 +30,25 @@
       on every /api/map request. Cache the serialized string in memory and
       invalidate only when a tile changes (updateTile() sets a dirty flag).
 
+- [x] Replace biome terrain coloring with single wilderness (neutral) color; color map
+      by ownership at full opacity so territory is immediately readable.
+- [x] Fix map pixelation: add antialias, resolution=devicePixelRatio, autoDensity to
+      PIXI.Application.init() for crisp HiDPI rendering.
+- [x] Territory preview during selection countdown: clicking a land tile during the
+      10-second spawn-selection phase now immediately shows the tile as player-owned
+      (blue fill) instead of only drawing a yellow outline.
+- [x] Per-owner color palette: ownerColor() helper assigns stable distinct colors to
+      each bot/AI owner via hash so multiple AI players are visually differentiated.
+
 ## Next dev tasks (Playability)
 - [x] Add population split (troops/workers) and UI slider.
 - [x] Add gold generation formula and dynamic resource display on UI.
 - [ ] Add unit movement and train/ship prototype.
 - [x] Add match end state and restart button with scoreboard.
 - [ ] Add simple multiplayer session API (join/match state).
-- [ ] Build menu UI — right-click or panel with City / Port buttons
+- [x] Build menu UI — right-click or panel with City / Port buttons
       (currently Shift+click only; Port has no frontend trigger at all).
-- [ ] Port building: wire port placement to gold-generating trade tick
+- [x] Port building: wire port placement to gold-generating trade tick
       (backend /building accepts type='port' but no income tick exists).
 
 ## Medium-term (Alpha → Beta)

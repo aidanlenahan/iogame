@@ -239,10 +239,12 @@ async function growPopulationTick(matchId = 'default') {
   if (!map) return;
   
   const playerTiles = {};
+  const playerPorts = {};
   for (const row of map) {
     for (const tile of row) {
       if (tile.owner && tile.owner !== 'neutral' && tile.type !== 'water') {
         playerTiles[tile.owner] = (playerTiles[tile.owner] || 0) + 1;
+        if (tile.building === 'port') playerPorts[tile.owner] = (playerPorts[tile.owner] || 0) + 1;
       }
     }
   }
@@ -275,7 +277,7 @@ async function growPopulationTick(matchId = 'default') {
     workers = clamp(workers + workerGrowth, 0, cap - troops);
     const totalPop = clamp(troops + workers, 0, cap);
 
-    const goldIncome = Math.floor(ownedCount * 0.25 + workers * 0.5 + 5);
+    const goldIncome = Math.floor(ownedCount * 0.25 + workers * 0.5 + 5 + (playerPorts[playerKey] || 0) * 15);
     const newGold = Math.max(0, gold + goldIncome);
 
     await safeHSet(fullKey, {
@@ -475,6 +477,83 @@ async function resetGame(matchId = 'default') {
   serverTick = 0;
 }
 
+// quickRestart: reuse the existing 192k-tile map; just reset ownership + player stats.
+// O(n) scan + 1 Redis SET vs 192,200 individual hSet calls — runs in ~50ms.
+async function quickRestart(matchId = 'default', startX = 22, startY = 78) {
+  const mapRaw = mapJSONCache[matchId] || await redisClient.get(`match:${matchId}:map_grid`);
+  if (!mapRaw) {
+    // First-ever boot: full init
+    await resetGame(matchId);
+    await initGame(matchId, startX, startY);
+    return;
+  }
+
+  const map = JSON.parse(mapRaw);
+  const height = map.length;
+  const width  = map[0].length;
+
+  function nearestLandInMap(tx, ty) {
+    const cx = clamp(Math.round(tx), 0, width  - 1);
+    const cy = clamp(Math.round(ty), 0, height - 1);
+    if (map[cy][cx] && map[cy][cx].type !== 'water') return { x: cx, y: cy };
+    for (let r = 1; r < 80; r++) {
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
+          const nx = cx + dx, ny = cy + dy;
+          if (nx >= 0 && ny >= 0 && nx < width && ny < height && map[ny][nx].type !== 'water')
+            return { x: nx, y: ny };
+        }
+      }
+    }
+    return { x: cx, y: cy };
+  }
+
+  const p1 = nearestLandInMap(startX, startY);
+  // Place bot on opposite side, with some variance
+  const botRawX = (width  - 1 - p1.x) + (Math.random() - 0.5) * width  * 0.25;
+  const botRawY = (height - 1 - p1.y) + (Math.random() - 0.5) * height * 0.25;
+  const bot1 = nearestLandInMap(botRawX, botRawY);
+
+  // Reset all ownership + buildings in one pass
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const t = map[y][x];
+      if (t.owner !== 'neutral' || t.building) {
+        map[y][x] = { type: t.type, country: t.country, owner: 'neutral', pop: 1, building: '' };
+      }
+    }
+  }
+  map[p1.y  ][p1.x  ] = { ...map[p1.y  ][p1.x  ], owner: 'player1', pop: 1 };
+  map[bot1.y][bot1.x] = { ...map[bot1.y][bot1.x], owner: 'bot1',    pop: 1 };
+
+  // Persist to Redis + update caches
+  const newJSON = JSON.stringify(map);
+  await redisClient.set(`match:${matchId}:map_grid`, newJSON);
+  mapJSONCache[matchId]  = newJSON;
+  delete mapStatsCache[matchId];
+
+  // Clear queued attack orders
+  const orderKeys = await redisClient.keys(`match:${matchId}:order:*`);
+  if (orderKeys.length) await redisClient.del(orderKeys);
+
+  // Bust client diff caches — any stored clientTick is now stale
+  pendingTickChanges = [];
+  serverTick += MAX_TICK_HISTORY + 1;
+  changesByTick.clear();
+
+  // Reset player stats
+  await safeHSet(`match:${matchId}:player:player1`, {
+    pop: '1000', troops: '800', workers: '200', gold: '1000',
+    cap: '100000', troopRatio: '80', eliminated: 'false'
+  });
+  await safeHSet(`match:${matchId}:player:bot1`, {
+    pop: '500', troops: '400', workers: '100', gold: '500',
+    cap: '100000', troopRatio: '80', eliminated: 'false'
+  });
+  console.log(`quickRestart done: player1@(${p1.x},${p1.y}) bot1@(${bot1.x},${bot1.y})`);
+}
+
 async function start() {
   await initGame();
   setInterval(() => growPopulationTick('default'), 1000);
@@ -614,17 +693,12 @@ async function start() {
         let body = '';
         for await (const chunk of req) body += chunk;
         const payload = body ? JSON.parse(body) : {};
-        const startX = Number.isInteger(payload.startX) ? payload.startX : 10;
-        const startY = Number.isInteger(payload.startY) ? payload.startY : 35;
-        const botX = Number.isInteger(payload.botX) ? payload.botX : 130;
-        const botY = Number.isInteger(payload.botY) ? payload.botY : 35;
-        await resetGame(matchId);
-        await initGame(matchId, startX, startY, botX, botY);
-        const map = await getMap(matchId);
+        const startX = Number.isFinite(payload.startX) ? payload.startX : 22;
+        const startY = Number.isFinite(payload.startY) ? payload.startY : 78;
+        await quickRestart(matchId, startX, startY);
         const player = await getPlayer('player1', matchId);
-        const stats = computeMapStats(map);
         res.writeHead(200, {'Content-Type': 'application/json'});
-        res.end(JSON.stringify({ message: 'Game started', map, player, stats, matchId, startX, startY }));
+        res.end(JSON.stringify({ message: 'Game started', player, matchId, startX, startY }));
         return;
       }
 
