@@ -721,7 +721,7 @@
                         if (tileModel.owner !== 'player1') { drawUI('Select your own tile first.'); return; }
                         selected = { x, y, owner: tileModel.owner };
                         redrawSelectionLayer();
-                        drawUI(`Selected ${x},${y}. Click any enemy/neutral land tile to send troops.`);
+                        drawUI(`Selected ${x},${y}. Click enemy/neutral land to send troops (stays selected; click it again to clear).`);
                         return;
                     }
 
@@ -742,7 +742,7 @@
                     const result = await attackRes.json();
                     if (!attackRes.ok) { drawUI(`Attack failed: ${result.error || 'unknown'}`); }
                     else { drawUI(result.message); }
-                    selected = null;
+                    // Keep the source tile selected so repeated attacks are one click each
                     await renderCurrentMap();
                 });
 
