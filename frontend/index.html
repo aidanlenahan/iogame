@@ -205,7 +205,7 @@
       <button id="buildCityBtn">&#x1F3D9; City &mdash; 125g (+25k cap)</button>
       <button id="buildPortBtn">&#x2693; Port &mdash; 200g (+15 gold/tick)</button>
     </div>
-    <div id="ui"><h1>OpenFront Alpha</h1><p id="uiMsg">Left-click your tile, then click enemy land to send troops. Right-click your tile to build.</p><p id="stats">Connecting...</p></div>
+    <div id="ui"><h1>OpenFront Alpha</h1><p id="uiMsg">Left-click your tile, then click enemy land to send troops. Right-click your tile to build.</p><p id="stats">Connecting...</p><p id="lastAction"></p></div>
     <script>
         const app = new PIXI.Application();
         
@@ -408,8 +408,10 @@
                 gameState.scoreboard = data.scoreboard || [];
                 gameState.win = s.controlPct >= 80;
                 gameState.eliminated = p.eliminated;
+                const ownedTiles = (s.ownership && s.ownership.player1) || 0;
                 document.getElementById('stats').innerHTML =
-                    `Pop: ${p.pop} (T:${p.troops} W:${p.workers}) | Gold: ${p.gold} | Cap: ${p.cap} | Control: ${s.controlPct}% | Orders: ${s.pendingAttacks || 0}`;
+                    `Pop: ${p.pop} (T:${p.troops} W:${p.workers}) | Gold: ${p.gold} | Cap: ${p.cap} | Control: ${s.controlPct}% (${ownedTiles} tiles) | Orders: ${s.pendingAttacks || 0}`;
+                document.getElementById('lastAction').textContent = p.lastAction || '';
                 document.getElementById('ratioValue').textContent = `${p.troopRatio}%`;
                 document.getElementById('ratioSlider').value = String(p.troopRatio);
                 if (p.eliminated) {

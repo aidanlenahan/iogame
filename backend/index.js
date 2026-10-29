@@ -84,7 +84,8 @@ async function getPlayer(playerId, matchId = 'default') {
     gold: Number(p.gold || 0),
     cap: Number(p.cap || 100000),
     troopRatio: Number(p.troopRatio || 80),
-    eliminated
+    eliminated,
+    lastAction: p.lastAction || ''
   };
 }
 

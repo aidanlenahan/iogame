@@ -74,7 +74,8 @@
       gold: p.gold,
       cap: p.cap,
       troopRatio: p.troopRatio,
-      eliminated: p.eliminated
+      eliminated: p.eliminated,
+      lastAction: p.lastAction
     };
   }
 
