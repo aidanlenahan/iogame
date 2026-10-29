@@ -483,7 +483,7 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ ratio })
                 });
-                await renderCurrentMap();
+                await syncNow();
             });
 
             toggleAutoBtn.addEventListener('click', () => {
@@ -676,8 +676,8 @@
                         });
                         const buildData = await buildRes.json();
                         if (!buildRes.ok) { drawUI(`Build failed: ${buildData.error || 'unknown'}`); }
-                        else { drawUI('City built!'); }
-                        await renderCurrentMap();
+                        else { drawUI('City built!'); markBuilding(x, y, 'city'); }
+                        await syncNow();
                         return;
                     }
 
@@ -707,7 +707,7 @@
                     if (!attackRes.ok) { drawUI(`Attack failed: ${result.error || 'unknown'}`); }
                     else { drawUI(result.message); }
                     // Keep the source tile selected so repeated attacks are one click each
-                    await renderCurrentMap();
+                    await syncNow();
                 });
 
                 mapInitialized = true;
@@ -744,6 +744,22 @@
                 drawMap(data.map);
                 updateStats({ player: data.player, stats: data.stats, scoreboard: data.scoreboard });
                 return data;
+            }
+
+            // Cheap refresh after player actions: uses the diff endpoint instead of
+            // re-downloading the full map on every click / slider move
+            async function syncNow() {
+                const data = await refreshMapForInterval();
+                drawMap(data.map);
+                updateStats({ player: data.player, stats: data.stats, scoreboard: data.scoreboard });
+            }
+
+            // Show a new building right away; the diff endpoint only reports it on the next tick
+            function markBuilding(x, y, type) {
+                const t = { ...mapTiles[y][x], building: type };
+                mapTiles[y][x] = t;
+                if (localMapData && localMapData[y]) localMapData[y][x] = t;
+                redrawDynamicLayers();
             }
 
             // ── Right-click build context menu ──────────────────────────────
@@ -794,7 +810,7 @@
                 });
                 const data = await res.json();
                 drawUI(res.ok ? 'City built! Population cap +25,000.' : `Build failed: ${data.error || 'unknown'}`);
-                if (res.ok) await renderCurrentMap();
+                if (res.ok) { markBuilding(x, y, 'city'); await syncNow(); }
             });
 
             document.getElementById('buildPortBtn').addEventListener('click', async () => {
@@ -808,7 +824,7 @@
                 });
                 const data = await res.json();
                 drawUI(res.ok ? 'Port built! +15 gold per tick.' : `Build failed: ${data.error || 'unknown'}`);
-                if (res.ok) await renderCurrentMap();
+                if (res.ok) { markBuilding(x, y, 'port'); await syncNow(); }
             });
 
             document.addEventListener('click', (e) => {
